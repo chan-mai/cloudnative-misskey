@@ -150,3 +150,4 @@ make fmt vet
 - statusは`Ready`条件と`phase`のみで、実Pod readinessの集約は未実装です。
 - `url`/`idGenerationMethod`のimmutable検証を行うvalidating webhookは未実装です。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
+- シークレットの値だけを更新(ローテーション)してもPodは再起動しません。ローリング判定のchecksumはプレースホルダ入りの`default.yml`本文基準で、値の変化を見ないためです。参照Secretの`resourceVersion`をchecksumに含める拡張は可能です。
