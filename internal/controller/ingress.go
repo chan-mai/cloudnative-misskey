@@ -18,12 +18,30 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
+
+// ingressAnnotations merges a class-specific default with the user's annotations
+// (user wins). For nginx it raises proxy-body-size, whose 1MB default would
+// otherwise reject media uploads.
+func ingressAnnotations(m *misskeyv1alpha1.Misskey, className string) map[string]string {
+	out := map[string]string{}
+	if strings.Contains(className, "nginx") {
+		out["nginx.ingress.kubernetes.io/proxy-body-size"] = "0"
+	}
+	for k, v := range m.Spec.Ingress.Annotations {
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
 // reconcileIngress creates/updates the Ingress routing the public host to the
 // proxy (or directly to the app when the proxy is disabled).
@@ -42,7 +60,7 @@ func (r *MisskeyReconciler) reconcileIngress(ctx context.Context, m *misskeyv1al
 	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: m.Name, Namespace: m.Namespace}}
 	return r.apply(ctx, m, ing, func() error {
 		ing.Labels = labelsFor(m, "ingress")
-		ing.Annotations = m.Spec.Ingress.Annotations
+		ing.Annotations = ingressAnnotations(m, className)
 		ing.Spec.IngressClassName = &className
 		ing.Spec.Rules = []networkingv1.IngressRule{
 			{
