@@ -118,6 +118,9 @@ func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1alph
 	}); err != nil {
 		return err
 	}
+	if err := r.reconcilePDB(ctx, m, "proxy"); err != nil {
+		return err
+	}
 
 	if !boolOr(m.Spec.Proxy.Maintenance.Enabled, true) {
 		return nil
