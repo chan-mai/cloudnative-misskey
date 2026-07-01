@@ -17,8 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"strings"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -57,20 +55,19 @@ func renderInitEnv(p plan) []corev1.EnvVar {
 	return env
 }
 
-// renderSedCommand builds the sed pipeline that expands secret placeholders.
-func renderSedCommand(p plan) string {
-	exprs := []string{`-e "s|\${DB_PASSWORD}|${DB_PASSWORD}|g"`}
-	if p.meiliEnabled {
-		exprs = append(exprs, `-e "s|\${MEILI_KEY}|${MEILI_KEY}|g"`)
-	}
-	if p.redisPassSel != nil {
-		exprs = append(exprs, `-e "s|\${REDIS_PASSWORD}|${REDIS_PASSWORD}|g"`)
-	}
-	if p.setupEnabled {
-		exprs = append(exprs, `-e "s|\${SETUP_PASSWORD}|${SETUP_PASSWORD}|g"`)
-	}
-	return "set -eu\nsed " + strings.Join(exprs, " ") + " /tpl/default.yml > /shared/default.yml"
+// renderConfigScript is a Node.js program that expands the ${...} secret
+// placeholders in default.yml by literal string replacement. Using
+// String.split(literal).join(value) avoids the regex and shell interpretation
+// that made the previous sed pipeline break (or allow injection) on values
+// containing |, &, \, $ or newlines. The Misskey image ships Node, so no extra
+// tooling image is needed.
+const renderConfigScript = `const fs = require('fs');
+let s = fs.readFileSync('/tpl/default.yml', 'utf8');
+for (const k of ['DB_PASSWORD', 'MEILI_KEY', 'REDIS_PASSWORD', 'SETUP_PASSWORD']) {
+  const v = process.env[k];
+  if (v !== undefined) s = s.split('${' + k + '}').join(v);
 }
+fs.writeFileSync('/shared/default.yml', s);`
 
 // httpProbe builds an HTTP GET probe against the Misskey server port.
 func httpProbe(path string, period, timeout, failure int32) *corev1.Probe {
@@ -145,10 +142,12 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 				},
 			},
 			{
-				// Expand ${...} secret placeholders in default.yml at pod start.
+				// Expand ${...} secret placeholders in default.yml at pod start,
+				// via literal replacement (no shell, no regex) so arbitrary
+				// characters in secret values cannot break or inject.
 				Name:            "render-config",
-				Image:           "alpine:3",
-				Command:         []string{"sh", "-c", renderSedCommand(p)},
+				Image:           m.Spec.Image,
+				Command:         []string{"node", "-e", renderConfigScript},
 				Env:             renderInitEnv(p),
 				SecurityContext: restrictedContainerSecurityContext(),
 				VolumeMounts: []corev1.VolumeMount{
