@@ -99,7 +99,9 @@ func renderCaddyfile(m *misskeyv1alpha1.Misskey) string {
 		w(fmt.Sprintf("\t\theader_up X-Real-IP {header.%s}\n", h))
 		w(fmt.Sprintf("\t\theader_up X-Forwarded-For {header.%s}\n", h))
 	}
-	w("\t\theader_up X-Forwarded-Proto {scheme}\n")
+	// Do not overwrite X-Forwarded-Proto with {scheme}: TLS terminates upstream
+	// so {scheme} here is http, which would clobber the https the ingress set.
+	// Caddy passes the upstream's X-Forwarded-Proto through by default.
 	w("\t\theader_up X-Forwarded-Host {host}\n\n")
 	w("\t\thealth_uri /api/server-info\n")
 	w("\t\thealth_interval 10s\n")
