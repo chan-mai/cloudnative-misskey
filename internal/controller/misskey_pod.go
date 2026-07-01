@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
@@ -71,6 +72,18 @@ func renderSedCommand(p plan) string {
 	return "set -eu\nsed " + strings.Join(exprs, " ") + " /tpl/default.yml > /shared/default.yml"
 }
 
+// httpProbe builds an HTTP GET probe against the Misskey server port.
+func httpProbe(path string, period, timeout, failure int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(misskeyPort)},
+		},
+		PeriodSeconds:    period,
+		TimeoutSeconds:   timeout,
+		FailureThreshold: failure,
+	}
+}
+
 // buildMisskeyPodSpec builds the shared PodSpec for the app and worker roles.
 func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp misskeyv1alpha1.ComponentSpec) corev1.PodSpec {
 	env := []corev1.EnvVar{
@@ -86,6 +99,33 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 	}
 
 	spread := spreadConstraints(labelsFor(m, role))
+
+	mainContainer := corev1.Container{
+		Name:            role,
+		Image:           m.Spec.Image,
+		SecurityContext: restrictedContainerSecurityContext(),
+		Resources:       comp.Resources,
+		Env:             env,
+		Ports:           ports,
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "config-rendered",
+				MountPath: "/misskey/.config/default.yml",
+				SubPath:   "default.yml",
+				ReadOnly:  true,
+			},
+			{Name: "built-volume", MountPath: "/misskey/built"},
+		},
+	}
+	// The app serves HTTP, so gate readiness and restart on Misskey's health
+	// endpoint. startupProbe absorbs a slow first boot (DB migrations). The
+	// worker is queue-only with no listener and no Service, so it gets no probe.
+	if role == roleApp {
+		const healthPath = "/api/server-info"
+		mainContainer.StartupProbe = httpProbe(healthPath, 10, 3, 30) // up to ~300s to boot
+		mainContainer.ReadinessProbe = httpProbe(healthPath, 10, 3, 3)
+		mainContainer.LivenessProbe = httpProbe(healthPath, 20, 5, 3)
+	}
 
 	return corev1.PodSpec{
 		ImagePullSecrets:          m.Spec.ImagePullSecrets,
@@ -117,25 +157,7 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 				},
 			},
 		},
-		Containers: []corev1.Container{
-			{
-				Name:            role,
-				Image:           m.Spec.Image,
-				SecurityContext: restrictedContainerSecurityContext(),
-				Resources:       comp.Resources,
-				Env:             env,
-				Ports:           ports,
-				VolumeMounts: []corev1.VolumeMount{
-					{
-						Name:      "config-rendered",
-						MountPath: "/misskey/.config/default.yml",
-						SubPath:   "default.yml",
-						ReadOnly:  true,
-					},
-					{Name: "built-volume", MountPath: "/misskey/built"},
-				},
-			},
-		},
+		Containers: []corev1.Container{mainContainer},
 		Volumes: []corev1.Volume{
 			{
 				Name: "config-tpl",
