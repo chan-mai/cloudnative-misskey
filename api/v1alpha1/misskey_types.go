@@ -1,0 +1,463 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// MisskeySpec defines the desired state of a Misskey instance.
+type MisskeySpec struct {
+	// URL is the public-facing URL of the instance, e.g. https://misskey.example.com/.
+	// Do not change this after the instance has been initialized.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://.+`
+	URL string `json:"url"`
+
+	// Image is the Misskey server container image. The app and worker share it.
+	// +kubebuilder:validation:Required
+	Image string `json:"image"`
+
+	// IDGenerationMethod is Misskey's note/user id format. Immutable after the
+	// instance has been initialized; when migrating an existing database, set it
+	// to the value the database was created with.
+	// +kubebuilder:validation:Enum=aid;aidx;meid;ulid;objectid
+	// +kubebuilder:default=aidx
+	// +optional
+	IDGenerationMethod string `json:"idGenerationMethod,omitempty"`
+
+	// ImagePullSecrets used to pull the Misskey image.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// App configures the web/API server Deployment (runs with MK_ONLY_SERVER).
+	// +optional
+	App ComponentSpec `json:"app,omitempty"`
+
+	// Worker configures the job queue Deployment (runs with MK_ONLY_QUEUE).
+	// +optional
+	Worker ComponentSpec `json:"worker,omitempty"`
+
+	// Proxy configures the Caddy reverse proxy fronting the app.
+	// +optional
+	Proxy ProxySpec `json:"proxy,omitempty"`
+
+	// Ingress configures the Ingress exposing the proxy (or the app when the
+	// proxy is disabled).
+	// +optional
+	Ingress IngressSpec `json:"ingress,omitempty"`
+
+	// Redis configures the Redis backend (managed StatefulSet or external).
+	// +optional
+	Redis RedisSpec `json:"redis,omitempty"`
+
+	// Search configures the fulltext search provider. MeiliSearch by default.
+	// +optional
+	Search SearchSpec `json:"search,omitempty"`
+
+	// Postgres configures the PostgreSQL backend (CNPG-managed or external).
+	// +optional
+	Postgres PostgresSpec `json:"postgres,omitempty"`
+
+	// SetupPassword configures the initial-setup admin password written to
+	// default.yml as `setupPassword`. When the block is present with no
+	// secretRef, the operator generates a random password into the Secret
+	// "<name>-setup" (key SETUP_PASSWORD); retrieve it to complete first setup.
+	// Omit the block to leave setupPassword out of default.yml entirely.
+	// +optional
+	SetupPassword *SetupPasswordSpec `json:"setupPassword,omitempty"`
+
+	// ExtraConfig is raw YAML appended verbatim to the generated default.yml.
+	// Use it for settings not modeled by this CRD.
+	// +optional
+	ExtraConfig string `json:"extraConfig,omitempty"`
+}
+
+// SetupPasswordSpec configures the Misskey initial-setup password.
+type SetupPasswordSpec struct {
+	// SecretRef references an existing secret key holding the setup password.
+	// When nil, the operator generates one into the Secret "<name>-setup".
+	// +optional
+	SecretRef *corev1.SecretKeySelector `json:"secretRef,omitempty"`
+}
+
+// ComponentSpec is the shared shape of the app and worker Deployments.
+type ComponentSpec struct {
+	// Replicas is the desired number of pods.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Resources describes compute requests/limits for the container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// NodeSelector constrains scheduling to matching nodes.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations allow scheduling onto tainted nodes.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+// ProxySpec configures the Caddy reverse proxy and maintenance fallback.
+type ProxySpec struct {
+	// Enabled toggles the Caddy proxy. When false the Ingress targets the app directly.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Replicas of the proxy Deployment.
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Image for the Caddy proxy and maintenance containers.
+	// +kubebuilder:default="caddy:2"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Maintenance configures the fallback page served when the app is down.
+	// +optional
+	Maintenance MaintenanceSpec `json:"maintenance,omitempty"`
+
+	// Resources for the proxy container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// MaintenanceSpec configures the maintenance fallback served on backend errors.
+type MaintenanceSpec struct {
+	// Enabled toggles the maintenance fallback Deployment.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// HTML is the page body served during maintenance. A default is used when empty.
+	// +optional
+	HTML string `json:"html,omitempty"`
+}
+
+// IngressSpec configures the Ingress exposing the instance.
+type IngressSpec struct {
+	// Enabled toggles Ingress creation.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// ClassName sets ingressClassName, e.g. nginx or traefik.
+	// +kubebuilder:default="nginx"
+	// +optional
+	ClassName string `json:"className,omitempty"`
+
+	// Host overrides the ingress host. Defaults to the host part of spec.url.
+	// +optional
+	Host string `json:"host,omitempty"`
+
+	// Annotations added to the Ingress object.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// TLSSecretName enables a TLS block referencing the named secret. Optional.
+	// +optional
+	TLSSecretName string `json:"tlsSecretName,omitempty"`
+}
+
+// RedisSpec configures the Redis backend.
+type RedisSpec struct {
+	// External points Misskey at an existing Redis. When set, no Redis is managed.
+	// +optional
+	External *ExternalRedis `json:"external,omitempty"`
+
+	// Image for the managed Redis StatefulSet.
+	// +kubebuilder:default="redis:7-alpine"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// MaxMemory passes --maxmemory to redis-server (allkeys-lru eviction).
+	// +kubebuilder:default="400mb"
+	// +optional
+	MaxMemory string `json:"maxMemory,omitempty"`
+
+	// Storage size of the managed Redis PVC.
+	// +kubebuilder:default="2Gi"
+	// +optional
+	Storage resource.Quantity `json:"storage,omitempty"`
+
+	// StorageClassName for the managed Redis PVC.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Resources for the managed Redis container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// ExternalRedis references a Redis running outside the operator's control.
+type ExternalRedis struct {
+	// Host of the external Redis.
+	// +kubebuilder:validation:Required
+	Host string `json:"host"`
+
+	// Port of the external Redis.
+	// +kubebuilder:default=6379
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// PasswordSecret optionally references the Redis password.
+	// +optional
+	PasswordSecret *corev1.SecretKeySelector `json:"passwordSecret,omitempty"`
+}
+
+// SearchProvider selects the Misskey fulltext search backend.
+// +kubebuilder:validation:Enum=meilisearch;sqlLike;sqlPgroonga
+type SearchProvider string
+
+const (
+	// SearchMeilisearch uses MeiliSearch (the default).
+	SearchMeilisearch SearchProvider = "meilisearch"
+	// SearchSQLLike uses PostgreSQL LIKE (no extension required).
+	SearchSQLLike SearchProvider = "sqlLike"
+	// SearchSQLPgroonga uses the PGroonga PostgreSQL extension.
+	SearchSQLPgroonga SearchProvider = "sqlPgroonga"
+)
+
+// SearchSpec configures fulltext search.
+type SearchSpec struct {
+	// Provider selects the fulltext search backend.
+	// +kubebuilder:default=meilisearch
+	// +optional
+	Provider SearchProvider `json:"provider,omitempty"`
+
+	// Meilisearch configures the MeiliSearch backend (provider=meilisearch).
+	// +optional
+	Meilisearch MeilisearchSpec `json:"meilisearch,omitempty"`
+}
+
+// MeilisearchSpec configures the MeiliSearch backend.
+type MeilisearchSpec struct {
+	// External points Misskey at an existing MeiliSearch. When set, none is managed.
+	// +optional
+	External *ExternalMeilisearch `json:"external,omitempty"`
+
+	// Image for the managed MeiliSearch StatefulSet.
+	// +kubebuilder:default="getmeili/meilisearch:v1.11"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Storage size of the managed MeiliSearch PVC.
+	// +kubebuilder:default="10Gi"
+	// +optional
+	Storage resource.Quantity `json:"storage,omitempty"`
+
+	// StorageClassName for the managed MeiliSearch PVC.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Index name used by Misskey. Defaults to the sanitized host of spec.url.
+	// +optional
+	Index string `json:"index,omitempty"`
+
+	// Scope selects which notes are indexed: local (this server) or global.
+	// +kubebuilder:validation:Enum=local;global
+	// +kubebuilder:default=local
+	// +optional
+	Scope string `json:"scope,omitempty"`
+
+	// MasterKeySecret references an existing master key. When empty the operator
+	// generates one and stores it in a Secret named <misskey>-meilisearch.
+	// +optional
+	MasterKeySecret *corev1.SecretKeySelector `json:"masterKeySecret,omitempty"`
+
+	// Resources for the managed MeiliSearch container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// ExternalMeilisearch references a MeiliSearch running outside the operator.
+type ExternalMeilisearch struct {
+	// Host of the external MeiliSearch.
+	// +kubebuilder:validation:Required
+	Host string `json:"host"`
+
+	// Port of the external MeiliSearch.
+	// +kubebuilder:default=7700
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// SSL toggles https when talking to the external MeiliSearch.
+	// +optional
+	SSL bool `json:"ssl,omitempty"`
+
+	// APIKeySecret references the API key for the external MeiliSearch.
+	// +kubebuilder:validation:Required
+	APIKeySecret corev1.SecretKeySelector `json:"apiKeySecret"`
+}
+
+// PostgresSpec configures the PostgreSQL backend.
+type PostgresSpec struct {
+	// External points Misskey at an existing PostgreSQL. When set, CNPG is not used.
+	// +optional
+	External *ExternalPostgres `json:"external,omitempty"`
+
+	// Instances is the CNPG cluster size (1 = single, >=2 = HA with replicas).
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Instances int32 `json:"instances,omitempty"`
+
+	// ImageName overrides the CNPG PostgreSQL image.
+	// +kubebuilder:default="ghcr.io/cloudnative-pg/postgresql:17"
+	// +optional
+	ImageName string `json:"imageName,omitempty"`
+
+	// Database is the DB name created by CNPG initdb.
+	// +kubebuilder:default="misskey"
+	// +optional
+	Database string `json:"database,omitempty"`
+
+	// Owner is the DB owner role created by CNPG initdb.
+	// +kubebuilder:default="misskey"
+	// +optional
+	Owner string `json:"owner,omitempty"`
+
+	// Storage size of each CNPG instance PVC.
+	// +kubebuilder:default="20Gi"
+	// +optional
+	Storage resource.Quantity `json:"storage,omitempty"`
+
+	// StorageClassName for the CNPG PVCs.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Parameters merged into postgresql.parameters of the CNPG cluster.
+	// +optional
+	Parameters map[string]string `json:"parameters,omitempty"`
+
+	// Resources for each CNPG instance.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Backup enables barmanObjectStore backups on the CNPG cluster.
+	// +optional
+	Backup *PostgresBackup `json:"backup,omitempty"`
+}
+
+// ExternalPostgres references a PostgreSQL running outside the operator.
+type ExternalPostgres struct {
+	// Host of the external PostgreSQL.
+	// +kubebuilder:validation:Required
+	Host string `json:"host"`
+
+	// Port of the external PostgreSQL.
+	// +kubebuilder:default=5432
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// Database name.
+	// +kubebuilder:validation:Required
+	Database string `json:"database"`
+
+	// User name.
+	// +kubebuilder:validation:Required
+	User string `json:"user"`
+
+	// PasswordSecret references the DB password.
+	// +kubebuilder:validation:Required
+	PasswordSecret corev1.SecretKeySelector `json:"passwordSecret"`
+}
+
+// PostgresBackup configures CNPG barmanObjectStore backups.
+type PostgresBackup struct {
+	// DestinationPath is the object store path, e.g. s3://bucket/path.
+	// +kubebuilder:validation:Required
+	DestinationPath string `json:"destinationPath"`
+
+	// EndpointURL of the S3-compatible object store.
+	// +optional
+	EndpointURL string `json:"endpointURL,omitempty"`
+
+	// S3Credentials references the access/secret keys.
+	// +optional
+	S3Credentials *S3Credentials `json:"s3Credentials,omitempty"`
+
+	// RetentionPolicy for backups, e.g. "30d".
+	// +kubebuilder:default="30d"
+	// +optional
+	RetentionPolicy string `json:"retentionPolicy,omitempty"`
+
+	// Schedule is a 6-field cron for a CNPG ScheduledBackup. Empty disables it.
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+}
+
+// S3Credentials references S3-compatible credentials stored in secrets.
+type S3Credentials struct {
+	// AccessKeyID references the access key id.
+	AccessKeyID corev1.SecretKeySelector `json:"accessKeyId"`
+	// SecretAccessKey references the secret access key.
+	SecretAccessKey corev1.SecretKeySelector `json:"secretAccessKey"`
+}
+
+// MisskeyStatus defines the observed state of a Misskey instance.
+type MisskeyStatus struct {
+	// Conditions represent the latest available observations of the instance state.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Phase is a coarse, human-readable state summary.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+
+	// ObservedGeneration is the .metadata.generation last reconciled.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=mk
+// +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.spec.url`
+// +kubebuilder:printcolumn:name="Search",type=string,JSONPath=`.spec.search.provider`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// Misskey is the Schema for the misskeys API.
+type Misskey struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   MisskeySpec   `json:"spec,omitempty"`
+	Status MisskeyStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// MisskeyList contains a list of Misskey.
+type MisskeyList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Misskey `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&Misskey{}, &MisskeyList{})
+}

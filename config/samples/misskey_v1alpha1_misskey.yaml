@@ -1,0 +1,78 @@
+# Full instance: one CR provisions app + worker + proxy + Redis + MeiliSearch +
+# a CNPG PostgreSQL cluster + Ingress. MeiliSearch is the default search backend.
+apiVersion: cloudnative-misskey.dev/v1alpha1
+kind: Misskey
+metadata:
+  name: example
+spec:
+  url: https://misskey.example.com/
+  image: misskey/misskey:2026.6.0
+  # aidx is Misskey's current default. Immutable after init.
+  idGenerationMethod: aidx
+
+  # Initial-setup admin password. With no secretRef the operator generates one
+  # into the Secret "example-setup" (key SETUP_PASSWORD). Retrieve it with:
+  #   kubectl get secret example-setup -o jsonpath='{.data.SETUP_PASSWORD}' | base64 -d
+  setupPassword: {}
+
+  app:
+    replicas: 3
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+      limits: { memory: 800Mi }
+
+  worker:
+    replicas: 2
+    resources:
+      requests: { cpu: 100m, memory: 500Mi }
+      limits: { memory: 1Gi }
+
+  search:
+    provider: meilisearch
+    meilisearch:
+      storage: 10Gi
+      scope: local
+      # index defaults to the sanitized host of spec.url.
+      # A master key is generated into the Secret "example-meilisearch" if unset.
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { memory: 1Gi }
+
+  redis:
+    storage: 2Gi
+    maxMemory: 400mb
+    resources:
+      requests: { cpu: 50m, memory: 256Mi }
+      limits: { memory: 512Mi }
+
+  postgres:
+    instances: 2
+    storage: 20Gi
+    database: misskey
+    owner: misskey
+    resources:
+      requests: { cpu: 200m, memory: 768Mi }
+      limits: { memory: 2Gi }
+    # Optional off-site backups to any S3-compatible object store.
+    backup:
+      destinationPath: s3://my-bucket/misskey/backups
+      endpointURL: https://s3.example.com
+      retentionPolicy: 30d
+      schedule: "0 0 3 * * *"
+      s3Credentials:
+        accessKeyId:
+          name: s3-credentials
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: s3-credentials
+          key: SECRET_ACCESS_KEY
+
+  proxy:
+    enabled: true
+    maintenance:
+      enabled: true
+
+  ingress:
+    enabled: true
+    className: nginx
+    host: misskey.example.com

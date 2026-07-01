@@ -1,0 +1,54 @@
+# Generic mode: point the app/worker at pre-existing DB / Redis / MeiliSearch
+# and skip the built-in proxy. Only app + worker + config + ingress are created.
+apiVersion: cloudnative-misskey.dev/v1alpha1
+kind: Misskey
+metadata:
+  name: solo
+spec:
+  url: https://mk.example.org/
+  image: misskey/misskey:2026.6.0
+
+  # Supply the initial-setup password from an existing secret (e.g. synced by
+  # ExternalSecret), instead of letting the operator generate one.
+  setupPassword:
+    secretRef:
+      name: misskey-setup
+      key: SETUP_PASSWORD
+
+  app:
+    replicas: 1
+  worker:
+    replicas: 1
+
+  postgres:
+    external:
+      host: postgres.db.svc
+      database: misskey
+      user: misskey
+      passwordSecret:
+        name: misskey-db
+        key: password
+
+  redis:
+    external:
+      host: redis.cache.svc
+
+  search:
+    provider: meilisearch
+    meilisearch:
+      external:
+        host: meilisearch.search.svc
+        port: 7700
+        apiKeySecret:
+          name: meili
+          key: MEILI_MASTER_KEY
+
+  proxy:
+    enabled: false
+
+  ingress:
+    enabled: true
+    className: nginx
+    host: mk.example.org
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
