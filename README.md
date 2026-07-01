@@ -146,8 +146,8 @@ make fmt vet
 
 ## 制限事項/TODO
 
-- CNPGの`Cluster`はunstructuredで生成し、`CreateOrUpdate`で更新します。CNPG mutating webhookのデフォルト付与とは競合しない範囲で、管理フィールドのみ上書きします。
-- statusは`Ready`条件と`phase`のみで、実Pod readinessの集約は未実装です。
+- CNPGの`Cluster`はServer-Side Applyで管理し、CNPG側が補完したフィールドは保持します。ただしCNPG Clusterをwatchしていないため、外部ドリフトの是正は次回reconcile/resync時になります。
+- statusはappの可用性で`Ready`/`Phase`を判定します。worker/Redis/MeiliSearch/DBの集約までは行いません。
 - `url`/`idGenerationMethod`のimmutable検証を行うvalidating webhookは未実装です。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
 - シークレットの値だけを更新(ローテーション)してもPodは再起動しません。ローリング判定のchecksumはプレースホルダ入りの`default.yml`本文基準で、値の変化を見ないためです。参照Secretの`resourceVersion`をchecksumに含める拡張は可能です。
