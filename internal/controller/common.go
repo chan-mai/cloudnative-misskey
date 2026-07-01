@@ -51,6 +51,11 @@ const (
 	postgresPort     = 5432
 	meiliMasterKeyID = "MEILI_MASTER_KEY"
 	setupPasswordID  = "SETUP_PASSWORD"
+
+	// genericNonRootUID is a non-root uid for workloads whose static-binary image
+	// does not depend on the image's own file ownership (Caddy, MeiliSearch).
+	// App/worker instead run as the Misskey image's real uid.
+	genericNonRootUID = 1000
 )
 
 // labelsFor returns the standard label set for a component of an instance.

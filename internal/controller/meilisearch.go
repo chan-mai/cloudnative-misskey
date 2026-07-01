@@ -89,7 +89,7 @@ func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskey
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorFor(m, "meilisearch")}
 		sts.Spec.Template.ObjectMeta.Labels = labelsFor(m, "meilisearch")
 		sts.Spec.Template.Spec = corev1.PodSpec{
-			SecurityContext: nonRootPodSecurityContext(misskeyUID),
+			SecurityContext: nonRootPodSecurityContext(genericNonRootUID),
 			Containers: []corev1.Container{
 				{
 					Name:            "meilisearch",

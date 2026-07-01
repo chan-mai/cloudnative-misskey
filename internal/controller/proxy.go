@@ -67,7 +67,7 @@ func buildCaddyPodSpec(m *misskeyv1alpha1.Misskey, caddyfileKey string, withMain
 	}
 
 	return corev1.PodSpec{
-		SecurityContext: nonRootPodSecurityContext(misskeyUID),
+		SecurityContext: nonRootPodSecurityContext(genericNonRootUID),
 		InitContainers: []corev1.Container{
 			{
 				Name:            "prepare-caddy",

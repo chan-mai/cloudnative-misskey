@@ -27,7 +27,9 @@ const (
 	roleApp    = "app"
 	roleWorker = "worker"
 
-	misskeyUID = 1000
+	// misskeyUID is the uid the official Misskey image runs as (USER misskey).
+	// Matching it keeps /misskey files and the built emptyDir writable.
+	misskeyUID = 991
 )
 
 // secretEnv builds an EnvVar sourced from a secret key.
