@@ -66,7 +66,7 @@ func (r *MisskeyReconciler) reconcileRedis(ctx context.Context, m *misskeyv1alph
 						"--maxmemory-policy", policy,
 					},
 					SecurityContext: restrictedContainerSecurityContext(),
-					Resources:       m.Spec.Redis.Resources,
+					Resources:       resourcesOr(m.Spec.Redis.Resources, "50m", "128Mi", "512Mi"),
 					Ports:           []corev1.ContainerPort{{ContainerPort: redisPort}},
 					VolumeMounts:    []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
 				},

@@ -83,7 +83,7 @@ func buildCaddyPodSpec(m *misskeyv1alpha1.Misskey, caddyfileKey string, withMain
 				Image:           image,
 				Command:         []string{"/caddy-bin/caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 				SecurityContext: restrictedContainerSecurityContext(),
-				Resources:       m.Spec.Proxy.Resources,
+				Resources:       resourcesOr(m.Spec.Proxy.Resources, "10m", "32Mi", "128Mi"),
 				Ports:           []corev1.ContainerPort{{ContainerPort: proxyPort}},
 				VolumeMounts:    mounts,
 			},

@@ -136,6 +136,23 @@ func quantityOr(q resource.Quantity, def string) resource.Quantity {
 	return q
 }
 
+// resourcesOr returns r when the user set any request/limit, else a default set.
+// Managed components get a floor so an omitted resources block is not BestEffort.
+func resourcesOr(r corev1.ResourceRequirements, reqCPU, reqMem, limMem string) corev1.ResourceRequirements {
+	if len(r.Requests) > 0 || len(r.Limits) > 0 {
+		return r
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(reqCPU),
+			corev1.ResourceMemory: resource.MustParse(reqMem),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse(limMem),
+		},
+	}
+}
+
 // nonRootPodSecurityContext is the hardened pod-level security context reused by
 // every workload the operator manages.
 func nonRootPodSecurityContext(uid int64) *corev1.PodSecurityContext {

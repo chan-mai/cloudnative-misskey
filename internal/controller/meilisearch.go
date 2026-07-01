@@ -95,7 +95,7 @@ func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskey
 					Name:            "meilisearch",
 					Image:           image,
 					SecurityContext: restrictedContainerSecurityContext(),
-					Resources:       m.Spec.Search.Meilisearch.Resources,
+					Resources:       resourcesOr(m.Spec.Search.Meilisearch.Resources, "100m", "256Mi", "1Gi"),
 					Env: []corev1.EnvVar{
 						secretEnv("MEILI_MASTER_KEY", p.meiliKeySel),
 						{Name: "MEILI_ENV", Value: "production"},

@@ -99,11 +99,16 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 
 	spread := spreadConstraints(labelsFor(m, role))
 
+	res := resourcesOr(comp.Resources, "100m", "400Mi", "800Mi")
+	if role == roleWorker {
+		res = resourcesOr(comp.Resources, "100m", "500Mi", "1Gi")
+	}
+
 	mainContainer := corev1.Container{
 		Name:            role,
 		Image:           m.Spec.Image,
 		SecurityContext: restrictedContainerSecurityContext(),
-		Resources:       comp.Resources,
+		Resources:       res,
 		Env:             env,
 		Ports:           ports,
 		VolumeMounts: []corev1.VolumeMount{
