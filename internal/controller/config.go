@@ -88,18 +88,25 @@ func renderCaddyfile(m *misskeyv1alpha1.Misskey) string {
 	var b strings.Builder
 	w := func(s string) { b.WriteString(s) }
 
+	// ingress(private range)のX-Forwarded-*信頼用グローバルオプション
+	// 未設定時はCaddyが上書きしclient IP・https喪失
+	// 前段が非privateなら実CIDR調整
+	w("{\n")
+	w("\tservers {\n")
+	w("\t\ttrusted_proxies static private_ranges\n")
+	w("\t}\n")
+	w("}\n\n")
 	w(fmt.Sprintf(":%d {\n", proxyPort))
 	w("\tencode gzip\n")
 	w("\theader /assets Cache-Control \"public, max-age=31536000, immutable\"\n\n")
 	w(fmt.Sprintf("\treverse_proxy %s:%d {\n", nameApp(m), misskeyPort))
-	// 明示的なソースヘッダ(例: Cloudflare)が設定された時のみクライアントIPヘッダを上書き
-	// それ以外はupstreamのものをそのまま通す
+	// ClientIPHeader指定時のみX-Real-IP/X-Forwarded-Forを上書き
+	// 未指定時はtrusted_proxiesで信頼したupstreamのX-Forwarded-Forを保持
 	if h := m.Spec.Proxy.ClientIPHeader; h != "" {
 		w(fmt.Sprintf("\t\theader_up X-Real-IP {header.%s}\n", h))
 		w(fmt.Sprintf("\t\theader_up X-Forwarded-For {header.%s}\n", h))
 	}
-	// X-Forwarded-Protoを{scheme}で上書きしない。TLSはupstreamで終端するため{scheme}はhttpになり、ingressが設定したhttpsを潰す
-	// Caddyは既定でupstreamのX-Forwarded-Protoをそのまま通す
+	// X-Forwarded-Protoは上書きせず、trusted_proxiesでupstreamのhttpsを保持
 	w("\t\theader_up X-Forwarded-Host {host}\n\n")
 	w("\t\thealth_uri /api/server-info\n")
 	w("\t\thealth_interval 10s\n")
