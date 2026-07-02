@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -152,41 +153,42 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 // reconcile結果とappの実ヘルスをMisskeyのstatusサブリソースに反映
 // インスタンスがReadyかを返す
 func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1.Misskey, reconcileErr error) (bool, error) {
-	cur := &misskeyv1alpha1.Misskey{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(m), cur); err != nil {
-		return false, client.IgnoreNotFound(err)
-	}
-
-	ready, reason, message := r.assessReady(ctx, cur)
-	cond := metav1.Condition{
-		Type:               "Ready",
-		ObservedGeneration: cur.Generation,
-		LastTransitionTime: metav1.Now(),
-	}
+	ready, reason, message := r.assessReady(ctx, m)
+	condStatus := metav1.ConditionTrue
+	phase := "Running"
 	switch {
 	case reconcileErr != nil:
 		ready = false
-		cond.Status = metav1.ConditionFalse
-		cond.Reason = "ReconcileError"
-		cond.Message = reconcileErr.Error()
-		cur.Status.Phase = "Error"
+		condStatus = metav1.ConditionFalse
+		reason = "ReconcileError"
+		message = reconcileErr.Error()
+		phase = "Error"
 	case ready:
-		cond.Status = metav1.ConditionTrue
-		cond.Reason = reason
-		cond.Message = message
-		cur.Status.Phase = "Running"
+		phase = "Running"
 	default:
-		cond.Status = metav1.ConditionFalse
-		cond.Reason = reason
-		cond.Message = message
-		cur.Status.Phase = "Progressing"
+		condStatus = metav1.ConditionFalse
+		phase = "Progressing"
 	}
-	apimeta.SetStatusCondition(&cur.Status.Conditions, cond)
-	cur.Status.ObservedGeneration = cur.Generation
-	if err := r.Status().Update(ctx, cur); err != nil {
-		return ready, err
-	}
-	return ready, nil
+
+	// conflict時はGet-modify-Updateごとやり直す
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cur := &misskeyv1alpha1.Misskey{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(m), cur); err != nil {
+			return err
+		}
+		apimeta.SetStatusCondition(&cur.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             condStatus,
+			Reason:             reason,
+			Message:            message,
+			ObservedGeneration: cur.Generation,
+			LastTransitionTime: metav1.Now(),
+		})
+		cur.Status.Phase = phase
+		cur.Status.ObservedGeneration = cur.Generation
+		return r.Status().Update(ctx, cur)
+	})
+	return ready, client.IgnoreNotFound(err)
 }
 
 // コントローラと所有リソースを結線
