@@ -305,3 +305,110 @@ func TestLabelsForTenant(t *testing.T) {
 		t.Error("selectorForにtenantが混入している")
 	}
 }
+
+func TestRuntimeDefaults(t *testing.T) {
+	m := newMisskey()
+	if runtimeUID(m) != 991 {
+		t.Errorf("uid default: %d", runtimeUID(m))
+	}
+	if got := strings.Join(runtimeStartCommand(m), " "); got != "pnpm run start" {
+		t.Errorf("start: %q", got)
+	}
+	if got := strings.Join(runtimeMigrateCommand(m), " "); got != "pnpm run migrate" {
+		t.Errorf("migrate: %q", got)
+	}
+	if runtimeHealthPath(m) != "/api/server-info" {
+		t.Errorf("health: %q", runtimeHealthPath(m))
+	}
+	if runtimeConfigPath(m) != "/misskey/.config/default.yml" {
+		t.Errorf("config: %q", runtimeConfigPath(m))
+	}
+	if runtimeBuiltPath(m) != "/misskey/built" {
+		t.Errorf("built: %q", runtimeBuiltPath(m))
+	}
+}
+
+func TestRuntimeOverrides(t *testing.T) {
+	uid := int64(1000)
+	empty := ""
+	m := newMisskey()
+	m.Spec.Runtime = misskeyv1alpha1.RuntimeSpec{
+		RunAsUser:      &uid,
+		StartCommand:   []string{"node", "start.js"},
+		MigrateCommand: []string{"node", "migrate.js"},
+		HealthPath:     "/healthz",
+		ConfigPath:     "/app/config.yml",
+		BuiltPath:      &empty, // 空でコピー無効
+	}
+	if runtimeUID(m) != 1000 {
+		t.Errorf("uid override: %d", runtimeUID(m))
+	}
+	if got := strings.Join(runtimeStartCommand(m), " "); got != "node start.js" {
+		t.Errorf("start override: %q", got)
+	}
+	if got := strings.Join(runtimeMigrateCommand(m), " "); got != "node migrate.js" {
+		t.Errorf("migrate override: %q", got)
+	}
+	if runtimeHealthPath(m) != "/healthz" {
+		t.Errorf("health override: %q", runtimeHealthPath(m))
+	}
+	if runtimeConfigPath(m) != "/app/config.yml" {
+		t.Errorf("config override: %q", runtimeConfigPath(m))
+	}
+	if runtimeBuiltPath(m) != "" {
+		t.Errorf("built override should be empty(disabled): %q", runtimeBuiltPath(m))
+	}
+}
+
+func hasMount(mounts []corev1.VolumeMount, path string) bool {
+	for _, mnt := range mounts {
+		if mnt.MountPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasContainer(cs []corev1.Container, name string) bool {
+	for _, c := range cs {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildPodSpecRuntime(t *testing.T) {
+	m := newMisskey()
+	p := resolve(m)
+
+	// default: uid 991、start command、config/builtマウント、prepare-built init有り
+	spec := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)
+	if spec.SecurityContext.RunAsUser == nil || *spec.SecurityContext.RunAsUser != 991 {
+		t.Error("default uid != 991")
+	}
+	c := spec.Containers[0]
+	if strings.Join(c.Command, " ") != "pnpm run start" {
+		t.Errorf("default command: %v", c.Command)
+	}
+	if !hasMount(c.VolumeMounts, "/misskey/.config/default.yml") {
+		t.Error("config mount欠落")
+	}
+	if !hasMount(c.VolumeMounts, "/misskey/built") {
+		t.Error("built mount欠落")
+	}
+	if !hasContainer(spec.InitContainers, "prepare-built") {
+		t.Error("prepare-built init欠落")
+	}
+
+	// builtPath="" → built mount/prepare-built無し
+	empty := ""
+	m.Spec.Runtime.BuiltPath = &empty
+	spec = buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)
+	if hasMount(spec.Containers[0].VolumeMounts, "/misskey/built") {
+		t.Error("builtPath=空でbuilt mountが残っている")
+	}
+	if hasContainer(spec.InitContainers, "prepare-built") {
+		t.Error("builtPath=空でprepare-buildが残っている")
+	}
+}

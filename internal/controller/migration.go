@@ -35,16 +35,16 @@ func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan) *batchv1.Job {
 	pod := corev1.PodSpec{
 		RestartPolicy:    corev1.RestartPolicyOnFailure,
 		ImagePullSecrets: m.Spec.ImagePullSecrets,
-		SecurityContext:  nonRootPodSecurityContext(misskeyUID),
+		SecurityContext:  nonRootPodSecurityContext(runtimeUID(m)),
 		InitContainers:   misskeyInitContainers(m, p),
 		Containers: []corev1.Container{{
 			Name:            "migrate",
 			Image:           m.Spec.Image,
-			Command:         []string{"pnpm", "run", "migrate"},
+			Command:         runtimeMigrateCommand(m),
 			Env:             []corev1.EnvVar{{Name: "COREPACK_INTEGRITY_KEYS", Value: "0"}},
 			SecurityContext: restrictedContainerSecurityContext(),
 			Resources:       resourcesOr(corev1.ResourceRequirements{}, "100m", "400Mi", "800Mi"),
-			VolumeMounts:    misskeyConfigMounts(),
+			VolumeMounts:    misskeyConfigMounts(m),
 		}},
 		Volumes: misskeyVolumes(m),
 	}

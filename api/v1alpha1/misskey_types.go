@@ -57,6 +57,11 @@ type MisskeySpec struct {
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
+	// Runtime adapts the operator to Misskey forks whose image contract (uid,
+	// commands, paths, health endpoint) differs from upstream misskey/misskey.
+	// +optional
+	Runtime RuntimeSpec `json:"runtime,omitempty"`
+
 	// App configures the web/API server Deployment (runs with MK_ONLY_SERVER).
 	// +optional
 	App ComponentSpec `json:"app,omitempty"`
@@ -189,6 +194,41 @@ type LimitRangeSpec struct {
 	// Max container limits.
 	// +optional
 	Max corev1.ResourceList `json:"max,omitempty"`
+}
+
+// RuntimeSpec adapts the operator to Misskey forks whose image contract differs
+// from the upstream misskey/misskey image. Every field defaults to upstream, so
+// a structurally compatible fork usually needs only spec.image. The rendered
+// config is always Misskey's default.yml format.
+type RuntimeSpec struct {
+	// RunAsUser overrides the container uid. Default 991 (upstream misskey image).
+	// +optional
+	RunAsUser *int64 `json:"runAsUser,omitempty"`
+
+	// StartCommand overrides the app/worker container command.
+	// Default ["pnpm","run","start"].
+	// +optional
+	StartCommand []string `json:"startCommand,omitempty"`
+
+	// MigrateCommand overrides the migration Job command.
+	// Default ["pnpm","run","migrate"].
+	// +optional
+	MigrateCommand []string `json:"migrateCommand,omitempty"`
+
+	// HealthPath overrides the app HTTP health/probe path. Default /api/server-info.
+	// +optional
+	HealthPath string `json:"healthPath,omitempty"`
+
+	// ConfigPath overrides where the rendered default.yml is mounted in the
+	// container. Default /misskey/.config/default.yml.
+	// +optional
+	ConfigPath string `json:"configPath,omitempty"`
+
+	// BuiltPath is the pre-built assets directory copied to a writable emptyDir so
+	// the image can write compile-config output. Default /misskey/built. Set to an
+	// empty string to disable the copy for forks that do not need it.
+	// +optional
+	BuiltPath *string `json:"builtPath,omitempty"`
 }
 
 // SetupPasswordSpec configures the Misskey initial-setup password.

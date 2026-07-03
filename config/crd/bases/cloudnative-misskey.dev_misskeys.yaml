@@ -764,6 +764,46 @@ spec:
                     description: StorageClassName for the managed Redis PVC.
                     type: string
                 type: object
+              runtime:
+                description: |-
+                  Runtime adapts the operator to Misskey forks whose image contract (uid,
+                  commands, paths, health endpoint) differs from upstream misskey/misskey.
+                properties:
+                  builtPath:
+                    description: |-
+                      BuiltPath is the pre-built assets directory copied to a writable emptyDir so
+                      the image can write compile-config output. Default /misskey/built. Set to an
+                      empty string to disable the copy for forks that do not need it.
+                    type: string
+                  configPath:
+                    description: |-
+                      ConfigPath overrides where the rendered default.yml is mounted in the
+                      container. Default /misskey/.config/default.yml.
+                    type: string
+                  healthPath:
+                    description: HealthPath overrides the app HTTP health/probe path.
+                      Default /api/server-info.
+                    type: string
+                  migrateCommand:
+                    description: |-
+                      MigrateCommand overrides the migration Job command.
+                      Default ["pnpm","run","migrate"].
+                    items:
+                      type: string
+                    type: array
+                  runAsUser:
+                    description: RunAsUser overrides the container uid. Default 991
+                      (upstream misskey image).
+                    format: int64
+                    type: integer
+                  startCommand:
+                    description: |-
+                      StartCommand overrides the app/worker container command.
+                      Default ["pnpm","run","start"].
+                    items:
+                      type: string
+                    type: array
+                type: object
               search:
                 description: Search configures the fulltext search provider. MeiliSearch
                   by default.

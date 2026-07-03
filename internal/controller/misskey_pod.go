@@ -26,10 +26,6 @@ import (
 const (
 	roleApp    = "app"
 	roleWorker = "worker"
-
-	// 公式Misskeyイメージが動作するuid(USER misskey)
-	// 合わせることで/misskeyファイルとbuiltのemptyDirを書込可能に保つ
-	misskeyUID = 991
 )
 
 // secretキー由来のEnvVarを生成
@@ -103,19 +99,18 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 	mainContainer := corev1.Container{
 		Name:  role,
 		Image: m.Spec.Image,
-		// migrationはmigration Jobに一本化。既定CMDのmigrateandstartを使わずstartのみ
-		Command:         []string{"pnpm", "run", "start"},
+		// migrationはmigration Jobに一本化。startのみ(fork向けにruntime.startCommandで上書き可)
+		Command:         runtimeStartCommand(m),
 		SecurityContext: restrictedContainerSecurityContext(),
 		Resources:       res,
 		Env:             env,
 		Ports:           ports,
-		VolumeMounts:    misskeyConfigMounts(),
+		VolumeMounts:    misskeyConfigMounts(m),
 	}
-	// appはHTTPを提供するため、readinessと再起動をMisskeyのヘルスエンドポイントで制御
-	// startupProbeが遅い初回起動(DBマイグレーション)を吸収
-	// workerはキュー専用でリスナもServiceもないためprobeなし
+	// appはHTTPを提供するため、readinessと再起動をヘルスエンドポイントで制御
+	// startupProbeが遅い初回起動を吸収。workerはキュー専用でprobeなし
 	if role == roleApp {
-		const healthPath = "/api/server-info"
+		healthPath := runtimeHealthPath(m)
 		mainContainer.StartupProbe = httpProbe(healthPath, 10, 3, 30) // 起動まで最大~300s
 		mainContainer.ReadinessProbe = httpProbe(healthPath, 10, 3, 3)
 		mainContainer.LivenessProbe = httpProbe(healthPath, 20, 5, 3)
@@ -123,7 +118,7 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 
 	return corev1.PodSpec{
 		ImagePullSecrets:          m.Spec.ImagePullSecrets,
-		SecurityContext:           nonRootPodSecurityContext(misskeyUID),
+		SecurityContext:           nonRootPodSecurityContext(runtimeUID(m)),
 		TopologySpreadConstraints: spread,
 		NodeSelector:              comp.NodeSelector,
 		Tolerations:               comp.Tolerations,
@@ -134,35 +129,37 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 }
 
 // misskeyInitContainers: built/をwritable emptyDirへコピー + default.ymlのプレースホルダ展開
-// app/worker/migration Jobで共用
+// app/worker/migration Jobで共用。builtPathが空ならコピーinitを省く
 func misskeyInitContainers(m *misskeyv1alpha1.Misskey, p plan) []corev1.Container {
-	return []corev1.Container{
-		{
-			// built/を書込可能なemptyDirにコピー。compile-config等が書くため
+	var inits []corev1.Container
+	if bp := runtimeBuiltPath(m); bp != "" {
+		// built/を書込可能なemptyDirにコピー。compile-config等が書くため
+		inits = append(inits, corev1.Container{
 			Name:            "prepare-built",
 			Image:           m.Spec.Image,
-			Command:         []string{"sh", "-c", "cp -r /misskey/built/. /tmp/built/"},
+			Command:         []string{"cp", "-r", bp + "/.", "/tmp/built/"},
 			SecurityContext: restrictedContainerSecurityContext(),
 			VolumeMounts:    []corev1.VolumeMount{{Name: "built-volume", MountPath: "/tmp/built"}},
-		},
-		{
-			// default.ymlの${...}をリテラル置換で展開(シェル・正規表現なし)
-			Name:            "render-config",
-			Image:           m.Spec.Image,
-			Command:         []string{"node", "-e", renderConfigScript},
-			Env:             renderInitEnv(p),
-			SecurityContext: restrictedContainerSecurityContext(),
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: "config-tpl", MountPath: "/tpl"},
-				{Name: "config-rendered", MountPath: "/shared"},
-			},
-		},
+		})
 	}
+	// default.ymlの${...}をリテラル置換で展開(シェル・正規表現なし)
+	inits = append(inits, corev1.Container{
+		Name:            "render-config",
+		Image:           m.Spec.Image,
+		Command:         []string{"node", "-e", renderConfigScript},
+		Env:             renderInitEnv(p),
+		SecurityContext: restrictedContainerSecurityContext(),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "config-tpl", MountPath: "/tpl"},
+			{Name: "config-rendered", MountPath: "/shared"},
+		},
+	})
+	return inits
 }
 
-// misskeyVolumes: config template / rendered / built の3volume
+// misskeyVolumes: config template / rendered、builtPath有効時はbuilt emptyDir
 func misskeyVolumes(m *misskeyv1alpha1.Misskey) []corev1.Volume {
-	return []corev1.Volume{
+	vols := []corev1.Volume{
 		{
 			Name: "config-tpl",
 			VolumeSource: corev1.VolumeSource{
@@ -172,14 +169,20 @@ func misskeyVolumes(m *misskeyv1alpha1.Misskey) []corev1.Volume {
 			},
 		},
 		{Name: "config-rendered", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: "built-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 	}
+	if runtimeBuiltPath(m) != "" {
+		vols = append(vols, corev1.Volume{Name: "built-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	}
+	return vols
 }
 
-// misskeyConfigMount: default.ymlをread-onlyで、built/をwritableでマウント(main container用)
-func misskeyConfigMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
-		{Name: "config-rendered", MountPath: "/misskey/.config/default.yml", SubPath: "default.yml", ReadOnly: true},
-		{Name: "built-volume", MountPath: "/misskey/built"},
+// misskeyConfigMounts: default.ymlをread-only、builtPath有効時はwritableでマウント(main container用)
+func misskeyConfigMounts(m *misskeyv1alpha1.Misskey) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
+		{Name: "config-rendered", MountPath: runtimeConfigPath(m), SubPath: "default.yml", ReadOnly: true},
 	}
+	if bp := runtimeBuiltPath(m); bp != "" {
+		mounts = append(mounts, corev1.VolumeMount{Name: "built-volume", MountPath: bp})
+	}
+	return mounts
 }

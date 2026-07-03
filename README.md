@@ -125,6 +125,33 @@ spec:
 | `tenancy.dedicated` | `false` | namespace占有宣言。`quota`(ResourceQuota)/`limitRange`(LimitRange)生成の前提 |
 | `extraConfig` | (なし) | `default.yml`末尾に追記する生YAML |
 
+## フォークイメージ
+
+`spec.image`にフォークのimageを指定すれば、(構造がupstream準拠の物に限り)Misskey系フォークがそのまま動作します。固有のconfigキーは`extraConfig`で追加可能です。
+
+image契約(uid/コマンド/パス/health)がupstreamと異なるフォークは`spec.runtime`で上書きします。全て任意で、既定はupstream `misskey/misskey`です。
+
+| `runtime`フィールド | 既定 | 用途 |
+|---|---|---|
+| `runAsUser` | `991` | コンテナuid |
+| `startCommand` | `["pnpm","run","start"]` | app/worker起動コマンド |
+| `migrateCommand` | `["pnpm","run","migrate"]` | migration Jobコマンド |
+| `healthPath` | `/api/server-info` | probeパス |
+| `configPath` | `/misskey/.config/default.yml` | `default.yml`のmount先 |
+| `builtPath` | `/misskey/built` | `built/`のwritableコピー先。空文字でコピー無効 |
+
+例(uidと起動コマンドが異なるフォーク):
+
+```yaml
+spec:
+  image: ghcr.io/example/misskey-fork:1.0.0
+  runtime:
+    runAsUser: 1000
+    startCommand: ["node", "packages/backend/built/entry.js"]
+```
+
+設定描画は常にMisskeyの`default.yml`形式です。またrender initはimage内のnodeを使うため、nodeを持たないimageには対応しません。
+
 ## GitOpsでの利用
 
 ArgoCDやFlux等で配布する場合、Operator本体(`config/default`相当)を1つのApplication/Kustomizationとして同期し、各インスタンスは`Misskey` CRを1枚commitするだけで済みます。DBパスワードや`setupPassword`、S3バックアップ認証はSecretで供給し、外部シークレット管理ツールと組み合わせれば平文をgitに置かずに済みます。
