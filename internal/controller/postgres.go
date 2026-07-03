@@ -51,9 +51,18 @@ func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1a
 		initdb["postInitApplicationSQL"] = []any{"CREATE EXTENSION IF NOT EXISTS pgroonga"}
 	}
 
+	// CNPGが生成する全リソース(DB pod含む)に自前のラベルを継承させる
+	inheritedLabels := map[string]any{}
+	for k, v := range labelsFor(m, "postgres") {
+		inheritedLabels[k] = v
+	}
+
 	spec := map[string]any{
 		"instances": int64(int32OrDefault(pg.Instances, 1)),
 		"imageName": stringOr(pg.ImageName, "ghcr.io/cloudnative-pg/postgresql:17"),
+		"inheritedMetadata": map[string]any{
+			"labels": inheritedLabels,
+		},
 		"storage": map[string]any{
 			"size": storageSize.String(),
 		},

@@ -42,6 +42,15 @@ type MisskeySpec struct {
 	// +optional
 	IDGenerationMethod string `json:"idGenerationMethod,omitempty"`
 
+	// Tenant is the tenant identifier stamped as the cloudnative-misskey.dev/tenant
+	// label on every managed resource and pod (incl. CNPG pods), for per-tenant log
+	// and metric routing. Immutable; defaults to the namespace when omitted.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tenant is immutable"
+	// +optional
+	Tenant string `json:"tenant,omitempty"`
+
 	// ImagePullSecrets used to pull the Misskey image.
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`

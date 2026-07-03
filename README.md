@@ -107,6 +107,7 @@ spec:
 | `url` | (必須) | 公開URL。初期化後は変更不可 |
 | `image` | (必須) | Misskeyのimage。app/worker共通 |
 | `idGenerationMethod` | `aidx` | ID方式。初期化後は変更不可 |
+| `tenant` | namespace名 | 全リソース/podに付く`cloudnative-misskey.dev/tenant`ラベル値。ログ/メトリクスのテナント振り分け用。初期化後は変更不可 |
 | `setupPassword` | (なし) | 初回admin登録用パスワード。`secretRef`指定か、未指定なら`<name>-setup` Secretへ自動生成 |
 | `app.replicas`/`worker.replicas` | 1 | レプリカ数 |
 | `search.provider` | `meilisearch` | `meilisearch`/`sqlLike`/`sqlPgroonga` |

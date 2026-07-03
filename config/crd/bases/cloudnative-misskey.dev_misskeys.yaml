@@ -994,6 +994,17 @@ spec:
                       (e.g. cpu, memory, requests.cpu, limits.memory, pods).
                     type: object
                 type: object
+              tenant:
+                description: |-
+                  Tenant is the tenant identifier stamped as the cloudnative-misskey.dev/tenant
+                  label on every managed resource and pod (incl. CNPG pods), for per-tenant log
+                  and metric routing. Immutable; defaults to the namespace when omitted.
+                maxLength: 63
+                pattern: ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$
+                type: string
+                x-kubernetes-validations:
+                - message: tenant is immutable
+                  rule: self == oldSelf
               url:
                 description: |-
                   URL is the public-facing URL of the instance, e.g. https://misskey.example.com/.

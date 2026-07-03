@@ -59,11 +59,17 @@ const (
 // インスタンスの1コンポーネント用の標準ラベルセットを返す
 func labelsFor(m *misskeyv1alpha1.Misskey, component string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       "misskey",
-		"app.kubernetes.io/instance":   m.Name,
-		"app.kubernetes.io/component":  component,
-		"app.kubernetes.io/managed-by": "cloud-native-misskey",
+		"app.kubernetes.io/name":         "misskey",
+		"app.kubernetes.io/instance":     m.Name,
+		"app.kubernetes.io/component":    component,
+		"app.kubernetes.io/managed-by":   "cloud-native-misskey",
+		"cloudnative-misskey.dev/tenant": tenantOf(m),
 	}
+}
+
+// tenantOf: spec.tenant、未設定ならnamespace
+func tenantOf(m *misskeyv1alpha1.Misskey) string {
+	return stringOr(m.Spec.Tenant, m.Namespace)
 }
 
 // コンポーネント用の最小・不変なラベルセレクタを返す

@@ -279,3 +279,29 @@ func TestChecksumAnnotation(t *testing.T) {
 		t.Errorf("different input must change the checksum (else pods never roll)")
 	}
 }
+
+func TestTenantOf(t *testing.T) {
+	m := newMisskey()
+	// 未設定はnamespaceにfallback
+	if got := tenantOf(m); got != "ns" {
+		t.Errorf("fallback: got %q, want ns", got)
+	}
+	// 明示時はその値
+	m.Spec.Tenant = "acme-corp"
+	if got := tenantOf(m); got != "acme-corp" {
+		t.Errorf("explicit: got %q, want acme-corp", got)
+	}
+}
+
+func TestLabelsForTenant(t *testing.T) {
+	const key = "cloudnative-misskey.dev/tenant"
+	m := newMisskey()
+	m.Spec.Tenant = "acme-corp"
+	if got := labelsFor(m, roleApp)[key]; got != "acme-corp" {
+		t.Errorf("tenant label: got %q, want acme-corp", got)
+	}
+	// selectorForにtenantを含めない(不変selector維持)
+	if _, ok := selectorFor(m, roleApp)[key]; ok {
+		t.Error("selectorForにtenantが混入している")
+	}
+}
