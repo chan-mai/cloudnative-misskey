@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package controller
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -75,7 +76,7 @@ func TestResolveManaged(t *testing.T) {
 	if p.dbPassSel.Name != "example-db-app" || p.dbPassSel.Key != "password" {
 		t.Errorf("db password selector wrong: %+v", p.dbPassSel)
 	}
-	if !p.redisManaged || p.redisHost != "example-redis" {
+	if !p.redisManaged || p.redisDefault.host != "example-redis" {
 		t.Errorf("managed redis resolved wrong: %+v", p)
 	}
 	if !p.meiliEnabled || !p.meiliManaged || p.meiliHost != "example-meilisearch" {
@@ -115,7 +116,7 @@ func TestResolveExternal(t *testing.T) {
 	if p.dbPassSel.Name != "pgsec" || p.dbPassSel.Key != "pw" {
 		t.Errorf("external db pass selector wrong: %+v", p.dbPassSel)
 	}
-	if p.redisManaged || p.redisHost != "redis.svc" {
+	if p.redisManaged || p.redisDefault.host != "redis.svc" {
 		t.Errorf("external redis resolved wrong: %+v", p)
 	}
 	if p.meiliManaged || p.meiliHost != "meili.svc" || !p.meiliSSL {
@@ -557,6 +558,170 @@ func TestPoolerHelpers(t *testing.T) {
 	m.Spec.Postgres.Pooler.Enabled = boolPtr(false)
 	if poolerEnabled(m) {
 		t.Error("enabled=falseでdisabled")
+	}
+}
+
+func TestResolveRedisRoleFallback(t *testing.T) {
+	// roles未指定 → redisRolesは空、configはredisForXxxを出さない
+	p := resolve(newMisskey())
+	if len(p.redisRoles) != 0 {
+		t.Errorf("no roles must yield empty redisRoles: %+v", p.redisRoles)
+	}
+	out := renderDefaultYML(newMisskey(), p)
+	for _, s := range []string{"redisForJobQueue", "redisForPubsub", "redisForTimelines", "redisForReactions"} {
+		if strings.Contains(out, s) {
+			t.Errorf("unset role must be omitted, found %q", s)
+		}
+	}
+}
+
+func TestResolveRedisRoleManaged(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{}}
+	p := resolve(m)
+	ep, ok := p.redisRoles["jobQueue"]
+	if !ok || !ep.managed || ep.host != "example-redis-jobqueue" {
+		t.Errorf("managed jobQueue role wrong: %+v", ep)
+	}
+	if _, ok := p.redisRoles["pubsub"]; ok {
+		t.Error("unset pubsub role must not appear")
+	}
+}
+
+func TestResolveRedisRoleExternal(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{
+		Pubsub: &misskeyv1alpha1.RedisRole{External: &misskeyv1alpha1.ExternalRedis{
+			Host: "pubsub.redis.svc",
+			PasswordSecret: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "ps"}, Key: "pw",
+			},
+		}},
+	}
+	ep := resolve(m).redisRoles["pubsub"]
+	if ep.managed || ep.host != "pubsub.redis.svc" || ep.passEnv != "REDIS_PASSWORD_PUBSUB" {
+		t.Errorf("external pubsub role wrong: %+v", ep)
+	}
+}
+
+func TestResolveRedisHADefault(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	ep := resolve(m).redisDefault
+	if !ep.managed || !ep.ha || ep.masterName != "mymaster" {
+		t.Errorf("HA default endpoint wrong: %+v", ep)
+	}
+	if len(ep.sentinels) != 1 || ep.sentinels[0].host != "example-redis-sentinel" || ep.sentinels[0].port != 26379 {
+		t.Errorf("HA sentinel endpoint wrong: %+v", ep.sentinels)
+	}
+}
+
+func TestRenderRedisBlockSentinel(t *testing.T) {
+	ep := redisEndpoint{host: "h", port: 6379, sentinels: []redisHostPort{{host: "s", port: 26379}}, masterName: "mymaster"}
+	var b strings.Builder
+	renderRedisBlock(func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }, "redis", ep)
+	out := b.String()
+	for _, s := range []string{"sentinels:", "- host: s", "port: 26379", "name: mymaster"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("sentinel block missing %q\n%s", s, out)
+		}
+	}
+}
+
+func TestRenderDefaultYMLRedisRolesAndHA(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{}}
+	out := renderDefaultYML(m, resolve(m))
+	// default redisはHA sentinel、jobQueueは分離(HA継承でsentinel)
+	for _, s := range []string{"redis:", "sentinels:", "name: mymaster", "redisForJobQueue:", "host: example-redis-jobqueue-sentinel"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("expected %q in\n%s", s, out)
+		}
+	}
+	if strings.Contains(out, "redisForTimelines") {
+		t.Error("timelines role unset must be omitted")
+	}
+}
+
+func TestManagedRedisInstances(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{
+		JobQueue: &misskeyv1alpha1.RedisRole{},
+		Pubsub:   &misskeyv1alpha1.RedisRole{External: &misskeyv1alpha1.ExternalRedis{Host: "x"}},
+	}
+	insts := managedRedisInstances(m)
+	// default + jobQueue(managed)。pubsubはexternalで除外
+	got := map[string]bool{}
+	for _, i := range insts {
+		got[i.suffix] = true
+	}
+	if !got[""] || !got["jobqueue"] || got["pubsub"] {
+		t.Errorf("managed instances wrong: %+v", got)
+	}
+}
+
+func redisInstanceBySuffix(m *misskeyv1alpha1.Misskey, suffix string) redisManagedInstance {
+	for _, i := range managedRedisInstances(m) {
+		if i.suffix == suffix {
+			return i
+		}
+	}
+	return redisManagedInstance{}
+}
+
+func TestBuildRedisReplicationAndSentinel(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{Replicas: 5, Sentinels: 3}
+	inst := redisInstanceBySuffix(m, "")
+
+	repl := buildRedisReplication(m, inst)
+	if repl.GetKind() != "RedisReplication" || repl.GetName() != "example-redis" {
+		t.Errorf("replication identity wrong: %s/%s", repl.GetKind(), repl.GetName())
+	}
+	rspec := repl.Object["spec"].(map[string]any)
+	if rspec["clusterSize"] != int64(5) {
+		t.Errorf("clusterSize: %v", rspec["clusterSize"])
+	}
+	if kc := rspec["kubernetesConfig"].(map[string]any); kc["image"] != "quay.io/opstree/redis:v8.2.5" {
+		t.Errorf("image: %v", kc["image"])
+	}
+	if psc := rspec["podSecurityContext"].(map[string]any); psc["fsGroup"] != int64(1000) {
+		t.Errorf("fsGroup must be 1000 (opstree non-root): %v", psc["fsGroup"])
+	}
+
+	sen := buildRedisSentinel(m, inst)
+	sspec := sen.Object["spec"].(map[string]any)
+	if sspec["clusterSize"] != int64(3) {
+		t.Errorf("sentinel clusterSize: %v", sspec["clusterSize"])
+	}
+	rsc := sspec["redisSentinelConfig"].(map[string]any)
+	if rsc["redisReplicationName"] != "example-redis" || rsc["masterGroupName"] != "mymaster" || rsc["quorum"] != "2" {
+		t.Errorf("redisSentinelConfig wrong: %+v", rsc)
+	}
+}
+
+func TestRedisEgressRule(t *testing.T) {
+	m := newMisskey()
+	if redisEgressRule(m) != nil {
+		t.Error("no HA → redisEgressRule nil")
+	}
+	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	rr := redisEgressRule(m)
+	if rr == nil || rr.To[0].PodSelector == nil {
+		t.Fatalf("HA → egress rule expected: %+v", rr)
+	}
+	vals := rr.To[0].PodSelector.MatchExpressions[0].Values
+	has := func(v string) bool {
+		for _, x := range vals {
+			if x == v {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("example-redis") || !has("example-redis-sentinel") {
+		t.Errorf("egress must select redis/sentinel operator pods (app=): %+v", vals)
 	}
 }
 

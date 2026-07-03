@@ -735,7 +735,13 @@ spec:
                       set, no Redis is managed.
                     properties:
                       host:
-                        description: Host of the external Redis.
+                        description: |-
+                          Host of the external Redis. With Sentinels set this is ignored by the
+                          client but still required by Misskey's config schema.
+                        type: string
+                      masterName:
+                        description: MasterName is the sentinel master group name
+                          (required with Sentinels).
                         type: string
                       passwordSecret:
                         description: PasswordSecret optionally references the Redis
@@ -767,12 +773,67 @@ spec:
                         description: Port of the external Redis.
                         format: int32
                         type: integer
+                      sentinels:
+                        description: |-
+                          Sentinels, when set, connects via Redis Sentinel (ioredis passthrough)
+                          instead of host/port.
+                        items:
+                          description: RedisHostPort is a sentinel endpoint.
+                          properties:
+                            host:
+                              type: string
+                            port:
+                              default: 26379
+                              format: int32
+                              type: integer
+                          required:
+                          - host
+                          type: object
+                        type: array
                     required:
                     - host
                     type: object
+                  ha:
+                    description: |-
+                      HA enables operator-managed Sentinel HA (CloudNativePG-style, via the
+                      OT-CONTAINER-KIT redis-operator) for managed Redis instances instead of a
+                      single-pod StatefulSet. Requires the redis-operator installed in the cluster.
+                    properties:
+                      enabled:
+                        default: true
+                        description: Enabled toggles HA when the block is present.
+                        type: boolean
+                      image:
+                        default: quay.io/opstree/redis:v8.2.5
+                        description: Image is the redis image driven by the operator's
+                          RedisReplication.
+                        type: string
+                      replicas:
+                        default: 3
+                        description: |-
+                          Replicas is the RedisReplication cluster size: total redis nodes
+                          (1 primary + N-1 replicas). 3 gives one primary and two replicas.
+                        format: int32
+                        minimum: 2
+                        type: integer
+                      sentinelImage:
+                        default: quay.io/opstree/redis-sentinel:v8.2.5
+                        description: SentinelImage is the redis-sentinel image for
+                          the operator's RedisSentinel.
+                        type: string
+                      sentinels:
+                        default: 3
+                        description: Sentinels is the RedisSentinel cluster size.
+                          Use an odd number for quorum.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
                   image:
-                    default: redis:7-alpine
-                    description: Image for the managed Redis StatefulSet.
+                    default: redis:8-alpine
+                    description: |-
+                      Image for the managed standalone Redis StatefulSet (HA off). Redis 8 is
+                      AGPLv3-licensed, matching this project.
                     type: string
                   maxMemory:
                     default: 400mb
@@ -849,6 +910,762 @@ spec:
                           If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
                           otherwise to an implementation-defined value. Requests cannot exceed Limits.
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  roles:
+                    description: |-
+                      Roles configures per-role Redis separation. Each role (jobQueue, pubsub,
+                      timelines, reactions) can point at its own managed instance or an external
+                      Redis; an unset role falls back to the shared redis (Misskey omits the
+                      redisForXxx block, which makes Misskey reuse the main redis).
+                    properties:
+                      jobQueue:
+                        description: |-
+                          RedisRole separates one Misskey Redis role. Presence separates the role;
+                          External points it at an existing Redis, otherwise a dedicated instance is
+                          provisioned (inheriting the default redis settings unless overridden here).
+                        properties:
+                          external:
+                            description: |-
+                              External points this role at an existing Redis. Mutually exclusive with the
+                              managed override fields.
+                            properties:
+                              host:
+                                description: |-
+                                  Host of the external Redis. With Sentinels set this is ignored by the
+                                  client but still required by Misskey's config schema.
+                                type: string
+                              masterName:
+                                description: MasterName is the sentinel master group
+                                  name (required with Sentinels).
+                                type: string
+                              passwordSecret:
+                                description: PasswordSecret optionally references
+                                  the Redis password.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              port:
+                                default: 6379
+                                description: Port of the external Redis.
+                                format: int32
+                                type: integer
+                              sentinels:
+                                description: |-
+                                  Sentinels, when set, connects via Redis Sentinel (ioredis passthrough)
+                                  instead of host/port.
+                                items:
+                                  description: RedisHostPort is a sentinel endpoint.
+                                  properties:
+                                    host:
+                                      type: string
+                                    port:
+                                      default: 26379
+                                      format: int32
+                                      type: integer
+                                  required:
+                                  - host
+                                  type: object
+                                type: array
+                            required:
+                            - host
+                            type: object
+                          ha:
+                            description: HA override for this role's managed instance.
+                              Nil inherits spec.redis.ha.
+                            properties:
+                              enabled:
+                                default: true
+                                description: Enabled toggles HA when the block is
+                                  present.
+                                type: boolean
+                              image:
+                                default: quay.io/opstree/redis:v8.2.5
+                                description: Image is the redis image driven by the
+                                  operator's RedisReplication.
+                                type: string
+                              replicas:
+                                default: 3
+                                description: |-
+                                  Replicas is the RedisReplication cluster size: total redis nodes
+                                  (1 primary + N-1 replicas). 3 gives one primary and two replicas.
+                                format: int32
+                                minimum: 2
+                                type: integer
+                              sentinelImage:
+                                default: quay.io/opstree/redis-sentinel:v8.2.5
+                                description: SentinelImage is the redis-sentinel image
+                                  for the operator's RedisSentinel.
+                                type: string
+                              sentinels:
+                                default: 3
+                                description: Sentinels is the RedisSentinel cluster
+                                  size. Use an odd number for quorum.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                            type: object
+                          maxMemory:
+                            description: MaxMemory override for this role's managed
+                              instance.
+                            type: string
+                          maxMemoryPolicy:
+                            description: MaxMemoryPolicy override for this role's
+                              managed instance.
+                            type: string
+                          resources:
+                            description: Resources override for this role's managed
+                              container.
+                            properties:
+                              claims:
+                                description: |-
+                                  Claims lists the names of resources, defined in spec.resourceClaims,
+                                  that are used by this container.
+
+                                  This is an alpha field and requires enabling the
+                                  DynamicResourceAllocation feature gate.
+
+                                  This field is immutable. It can only be set for containers.
+                                items:
+                                  description: ResourceClaim references one entry
+                                    in PodSpec.ResourceClaims.
+                                  properties:
+                                    name:
+                                      description: |-
+                                        Name must match the name of one entry in pod.spec.resourceClaims of
+                                        the Pod where this field is used. It makes that resource available
+                                        inside a container.
+                                      type: string
+                                    request:
+                                      description: |-
+                                        Request is the name chosen for a request in the referenced claim.
+                                        If empty, everything from the claim is made available, otherwise
+                                        only the result of this request.
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - name
+                                x-kubernetes-list-type: map
+                              limits:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Limits describes the maximum amount of compute resources allowed.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Requests describes the minimum amount of compute resources required.
+                                  If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                  otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                            type: object
+                          storage:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            description: Storage override for this role's managed
+                              PVC.
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: StorageClassName override for this role's
+                              managed PVC.
+                            type: string
+                        type: object
+                      pubsub:
+                        description: |-
+                          RedisRole separates one Misskey Redis role. Presence separates the role;
+                          External points it at an existing Redis, otherwise a dedicated instance is
+                          provisioned (inheriting the default redis settings unless overridden here).
+                        properties:
+                          external:
+                            description: |-
+                              External points this role at an existing Redis. Mutually exclusive with the
+                              managed override fields.
+                            properties:
+                              host:
+                                description: |-
+                                  Host of the external Redis. With Sentinels set this is ignored by the
+                                  client but still required by Misskey's config schema.
+                                type: string
+                              masterName:
+                                description: MasterName is the sentinel master group
+                                  name (required with Sentinels).
+                                type: string
+                              passwordSecret:
+                                description: PasswordSecret optionally references
+                                  the Redis password.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              port:
+                                default: 6379
+                                description: Port of the external Redis.
+                                format: int32
+                                type: integer
+                              sentinels:
+                                description: |-
+                                  Sentinels, when set, connects via Redis Sentinel (ioredis passthrough)
+                                  instead of host/port.
+                                items:
+                                  description: RedisHostPort is a sentinel endpoint.
+                                  properties:
+                                    host:
+                                      type: string
+                                    port:
+                                      default: 26379
+                                      format: int32
+                                      type: integer
+                                  required:
+                                  - host
+                                  type: object
+                                type: array
+                            required:
+                            - host
+                            type: object
+                          ha:
+                            description: HA override for this role's managed instance.
+                              Nil inherits spec.redis.ha.
+                            properties:
+                              enabled:
+                                default: true
+                                description: Enabled toggles HA when the block is
+                                  present.
+                                type: boolean
+                              image:
+                                default: quay.io/opstree/redis:v8.2.5
+                                description: Image is the redis image driven by the
+                                  operator's RedisReplication.
+                                type: string
+                              replicas:
+                                default: 3
+                                description: |-
+                                  Replicas is the RedisReplication cluster size: total redis nodes
+                                  (1 primary + N-1 replicas). 3 gives one primary and two replicas.
+                                format: int32
+                                minimum: 2
+                                type: integer
+                              sentinelImage:
+                                default: quay.io/opstree/redis-sentinel:v8.2.5
+                                description: SentinelImage is the redis-sentinel image
+                                  for the operator's RedisSentinel.
+                                type: string
+                              sentinels:
+                                default: 3
+                                description: Sentinels is the RedisSentinel cluster
+                                  size. Use an odd number for quorum.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                            type: object
+                          maxMemory:
+                            description: MaxMemory override for this role's managed
+                              instance.
+                            type: string
+                          maxMemoryPolicy:
+                            description: MaxMemoryPolicy override for this role's
+                              managed instance.
+                            type: string
+                          resources:
+                            description: Resources override for this role's managed
+                              container.
+                            properties:
+                              claims:
+                                description: |-
+                                  Claims lists the names of resources, defined in spec.resourceClaims,
+                                  that are used by this container.
+
+                                  This is an alpha field and requires enabling the
+                                  DynamicResourceAllocation feature gate.
+
+                                  This field is immutable. It can only be set for containers.
+                                items:
+                                  description: ResourceClaim references one entry
+                                    in PodSpec.ResourceClaims.
+                                  properties:
+                                    name:
+                                      description: |-
+                                        Name must match the name of one entry in pod.spec.resourceClaims of
+                                        the Pod where this field is used. It makes that resource available
+                                        inside a container.
+                                      type: string
+                                    request:
+                                      description: |-
+                                        Request is the name chosen for a request in the referenced claim.
+                                        If empty, everything from the claim is made available, otherwise
+                                        only the result of this request.
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - name
+                                x-kubernetes-list-type: map
+                              limits:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Limits describes the maximum amount of compute resources allowed.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Requests describes the minimum amount of compute resources required.
+                                  If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                  otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                            type: object
+                          storage:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            description: Storage override for this role's managed
+                              PVC.
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: StorageClassName override for this role's
+                              managed PVC.
+                            type: string
+                        type: object
+                      reactions:
+                        description: |-
+                          RedisRole separates one Misskey Redis role. Presence separates the role;
+                          External points it at an existing Redis, otherwise a dedicated instance is
+                          provisioned (inheriting the default redis settings unless overridden here).
+                        properties:
+                          external:
+                            description: |-
+                              External points this role at an existing Redis. Mutually exclusive with the
+                              managed override fields.
+                            properties:
+                              host:
+                                description: |-
+                                  Host of the external Redis. With Sentinels set this is ignored by the
+                                  client but still required by Misskey's config schema.
+                                type: string
+                              masterName:
+                                description: MasterName is the sentinel master group
+                                  name (required with Sentinels).
+                                type: string
+                              passwordSecret:
+                                description: PasswordSecret optionally references
+                                  the Redis password.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              port:
+                                default: 6379
+                                description: Port of the external Redis.
+                                format: int32
+                                type: integer
+                              sentinels:
+                                description: |-
+                                  Sentinels, when set, connects via Redis Sentinel (ioredis passthrough)
+                                  instead of host/port.
+                                items:
+                                  description: RedisHostPort is a sentinel endpoint.
+                                  properties:
+                                    host:
+                                      type: string
+                                    port:
+                                      default: 26379
+                                      format: int32
+                                      type: integer
+                                  required:
+                                  - host
+                                  type: object
+                                type: array
+                            required:
+                            - host
+                            type: object
+                          ha:
+                            description: HA override for this role's managed instance.
+                              Nil inherits spec.redis.ha.
+                            properties:
+                              enabled:
+                                default: true
+                                description: Enabled toggles HA when the block is
+                                  present.
+                                type: boolean
+                              image:
+                                default: quay.io/opstree/redis:v8.2.5
+                                description: Image is the redis image driven by the
+                                  operator's RedisReplication.
+                                type: string
+                              replicas:
+                                default: 3
+                                description: |-
+                                  Replicas is the RedisReplication cluster size: total redis nodes
+                                  (1 primary + N-1 replicas). 3 gives one primary and two replicas.
+                                format: int32
+                                minimum: 2
+                                type: integer
+                              sentinelImage:
+                                default: quay.io/opstree/redis-sentinel:v8.2.5
+                                description: SentinelImage is the redis-sentinel image
+                                  for the operator's RedisSentinel.
+                                type: string
+                              sentinels:
+                                default: 3
+                                description: Sentinels is the RedisSentinel cluster
+                                  size. Use an odd number for quorum.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                            type: object
+                          maxMemory:
+                            description: MaxMemory override for this role's managed
+                              instance.
+                            type: string
+                          maxMemoryPolicy:
+                            description: MaxMemoryPolicy override for this role's
+                              managed instance.
+                            type: string
+                          resources:
+                            description: Resources override for this role's managed
+                              container.
+                            properties:
+                              claims:
+                                description: |-
+                                  Claims lists the names of resources, defined in spec.resourceClaims,
+                                  that are used by this container.
+
+                                  This is an alpha field and requires enabling the
+                                  DynamicResourceAllocation feature gate.
+
+                                  This field is immutable. It can only be set for containers.
+                                items:
+                                  description: ResourceClaim references one entry
+                                    in PodSpec.ResourceClaims.
+                                  properties:
+                                    name:
+                                      description: |-
+                                        Name must match the name of one entry in pod.spec.resourceClaims of
+                                        the Pod where this field is used. It makes that resource available
+                                        inside a container.
+                                      type: string
+                                    request:
+                                      description: |-
+                                        Request is the name chosen for a request in the referenced claim.
+                                        If empty, everything from the claim is made available, otherwise
+                                        only the result of this request.
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - name
+                                x-kubernetes-list-type: map
+                              limits:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Limits describes the maximum amount of compute resources allowed.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Requests describes the minimum amount of compute resources required.
+                                  If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                  otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                            type: object
+                          storage:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            description: Storage override for this role's managed
+                              PVC.
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: StorageClassName override for this role's
+                              managed PVC.
+                            type: string
+                        type: object
+                      timelines:
+                        description: |-
+                          RedisRole separates one Misskey Redis role. Presence separates the role;
+                          External points it at an existing Redis, otherwise a dedicated instance is
+                          provisioned (inheriting the default redis settings unless overridden here).
+                        properties:
+                          external:
+                            description: |-
+                              External points this role at an existing Redis. Mutually exclusive with the
+                              managed override fields.
+                            properties:
+                              host:
+                                description: |-
+                                  Host of the external Redis. With Sentinels set this is ignored by the
+                                  client but still required by Misskey's config schema.
+                                type: string
+                              masterName:
+                                description: MasterName is the sentinel master group
+                                  name (required with Sentinels).
+                                type: string
+                              passwordSecret:
+                                description: PasswordSecret optionally references
+                                  the Redis password.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              port:
+                                default: 6379
+                                description: Port of the external Redis.
+                                format: int32
+                                type: integer
+                              sentinels:
+                                description: |-
+                                  Sentinels, when set, connects via Redis Sentinel (ioredis passthrough)
+                                  instead of host/port.
+                                items:
+                                  description: RedisHostPort is a sentinel endpoint.
+                                  properties:
+                                    host:
+                                      type: string
+                                    port:
+                                      default: 26379
+                                      format: int32
+                                      type: integer
+                                  required:
+                                  - host
+                                  type: object
+                                type: array
+                            required:
+                            - host
+                            type: object
+                          ha:
+                            description: HA override for this role's managed instance.
+                              Nil inherits spec.redis.ha.
+                            properties:
+                              enabled:
+                                default: true
+                                description: Enabled toggles HA when the block is
+                                  present.
+                                type: boolean
+                              image:
+                                default: quay.io/opstree/redis:v8.2.5
+                                description: Image is the redis image driven by the
+                                  operator's RedisReplication.
+                                type: string
+                              replicas:
+                                default: 3
+                                description: |-
+                                  Replicas is the RedisReplication cluster size: total redis nodes
+                                  (1 primary + N-1 replicas). 3 gives one primary and two replicas.
+                                format: int32
+                                minimum: 2
+                                type: integer
+                              sentinelImage:
+                                default: quay.io/opstree/redis-sentinel:v8.2.5
+                                description: SentinelImage is the redis-sentinel image
+                                  for the operator's RedisSentinel.
+                                type: string
+                              sentinels:
+                                default: 3
+                                description: Sentinels is the RedisSentinel cluster
+                                  size. Use an odd number for quorum.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                            type: object
+                          maxMemory:
+                            description: MaxMemory override for this role's managed
+                              instance.
+                            type: string
+                          maxMemoryPolicy:
+                            description: MaxMemoryPolicy override for this role's
+                              managed instance.
+                            type: string
+                          resources:
+                            description: Resources override for this role's managed
+                              container.
+                            properties:
+                              claims:
+                                description: |-
+                                  Claims lists the names of resources, defined in spec.resourceClaims,
+                                  that are used by this container.
+
+                                  This is an alpha field and requires enabling the
+                                  DynamicResourceAllocation feature gate.
+
+                                  This field is immutable. It can only be set for containers.
+                                items:
+                                  description: ResourceClaim references one entry
+                                    in PodSpec.ResourceClaims.
+                                  properties:
+                                    name:
+                                      description: |-
+                                        Name must match the name of one entry in pod.spec.resourceClaims of
+                                        the Pod where this field is used. It makes that resource available
+                                        inside a container.
+                                      type: string
+                                    request:
+                                      description: |-
+                                        Request is the name chosen for a request in the referenced claim.
+                                        If empty, everything from the claim is made available, otherwise
+                                        only the result of this request.
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - name
+                                x-kubernetes-list-type: map
+                              limits:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Limits describes the maximum amount of compute resources allowed.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Requests describes the minimum amount of compute resources required.
+                                  If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                  otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                            type: object
+                          storage:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            description: Storage override for this role's managed
+                              PVC.
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          storageClassName:
+                            description: StorageClassName override for this role's
+                              managed PVC.
+                            type: string
                         type: object
                     type: object
                   storage:

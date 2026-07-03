@@ -44,8 +44,14 @@ func renderInitEnv(p plan) []corev1.EnvVar {
 	if p.meiliEnabled {
 		env = append(env, secretEnv("MEILI_KEY", p.meiliKeySel))
 	}
-	if p.redisPassSel != nil {
-		env = append(env, secretEnv("REDIS_PASSWORD", *p.redisPassSel))
+	// default + 各role redisのpassword(external認証時のみ)。managedは認証なし
+	if p.redisDefault.passSel != nil {
+		env = append(env, secretEnv(p.redisDefault.passEnv, *p.redisDefault.passSel))
+	}
+	for _, rd := range redisRoleDescs {
+		if ep, ok := p.redisRoles[rd.key]; ok && ep.passSel != nil {
+			env = append(env, secretEnv(ep.passEnv, *ep.passSel))
+		}
 	}
 	if p.setupEnabled {
 		env = append(env, secretEnv("SETUP_PASSWORD", p.setupSel))
@@ -58,7 +64,7 @@ func renderInitEnv(p plan) []corev1.EnvVar {
 // MisskeyイメージにNode同梱のため追加のツールイメージは不要
 const renderConfigScript = `const fs = require('fs');
 let s = fs.readFileSync('/tpl/default.yml', 'utf8');
-for (const k of ['DB_PASSWORD', 'MEILI_KEY', 'REDIS_PASSWORD', 'SETUP_PASSWORD']) {
+for (const k of ['DB_PASSWORD', 'MEILI_KEY', 'REDIS_PASSWORD', 'REDIS_PASSWORD_JOBQUEUE', 'REDIS_PASSWORD_PUBSUB', 'REDIS_PASSWORD_TIMELINES', 'REDIS_PASSWORD_REACTIONS', 'SETUP_PASSWORD']) {
   const v = process.env[k];
   if (v !== undefined) s = s.split('${' + k + '}').join(v);
 }

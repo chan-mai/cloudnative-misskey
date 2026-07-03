@@ -114,7 +114,12 @@ func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *mis
 		frontend.Spec.PolicyTypes = []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}
 		// CNPGはpooler podのapp.kubernetes.io/instanceをクラスタ名で上書きするためintra-instance則に載らない
 		// cnpg.io/clusterでdb/pooler pod宛egressを別途許可(app/worker→pooler-rw/ro疎通)
-		frontend.Spec.Egress = append(common, dbEgressRule(m), publicEgressRule())
+		egress := append(common, dbEgressRule(m))
+		// redis HA operator管理pod(app=<CR名>、instance label無し)宛も同様に許可
+		if rr := redisEgressRule(m); rr != nil {
+			egress = append(egress, *rr)
+		}
+		frontend.Spec.Egress = append(egress, publicEgressRule())
 		return nil
 	}); err != nil {
 		return err
@@ -164,6 +169,38 @@ func dbEgressRule(m *misskeyv1alpha1.Misskey) networkingv1.NetworkPolicyEgressRu
 	return networkingv1.NetworkPolicyEgressRule{
 		To: []networkingv1.NetworkPolicyPeer{{
 			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"cnpg.io/cluster": nameDB(m)}},
+		}},
+	}
+}
+
+// redisHAPodApps: HA operator管理redis/sentinel podのapp label値一覧
+// RedisReplication pod=app:<CR名>、RedisSentinel pod=app:<CR名>-sentinel
+func redisHAPodApps(m *misskeyv1alpha1.Misskey) []string {
+	var apps []string
+	for _, inst := range managedRedisInstances(m) {
+		if inst.ha {
+			apps = append(apps, nameRedisInstance(m, inst.suffix), nameRedisSentinelService(m, inst.suffix))
+		}
+	}
+	return apps
+}
+
+// redisEgressRule: HA operator管理pod宛egressを許可(app.kubernetes.io/instanceを持たないため)
+// HAインスタンスが無ければnil
+func redisEgressRule(m *misskeyv1alpha1.Misskey) *networkingv1.NetworkPolicyEgressRule {
+	apps := redisHAPodApps(m)
+	if len(apps) == 0 {
+		return nil
+	}
+	return &networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{{
+			PodSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      "app",
+					Operator: metav1.LabelSelectorOpIn,
+					Values:   apps,
+				}},
+			},
 		}},
 	}
 }

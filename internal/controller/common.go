@@ -47,10 +47,13 @@ const (
 	misskeyPort      = 3000
 	proxyPort        = 8080
 	redisPort        = 6379
+	sentinelPort     = 26379
 	meiliPort        = 7700
 	postgresPort     = 5432
 	meiliMasterKeyID = "MEILI_MASTER_KEY"
 	setupPasswordID  = "SETUP_PASSWORD"
+	// HA時にRedisSentinelが監視するmaster group名。各roleは独立したsentinel群のため共通で可
+	redisMasterGroup = "mymaster"
 
 	// 静的バイナリでイメージ自身のファイル所有権に依存しないワークロード用の非rootのuid(Caddy, MeiliSearch)
 	// app/workerはMisskeyイメージの実uidで動作
@@ -83,11 +86,50 @@ func selectorFor(m *misskeyv1alpha1.Misskey, component string) map[string]string
 }
 
 // 子オブジェクト名。すべてインスタンス名から決定的に導出
-func nameApp(m *misskeyv1alpha1.Misskey) string             { return m.Name + "-app" }
-func nameWorker(m *misskeyv1alpha1.Misskey) string          { return m.Name + "-worker" }
-func nameProxy(m *misskeyv1alpha1.Misskey) string           { return m.Name + "-proxy" }
-func nameMaintenance(m *misskeyv1alpha1.Misskey) string     { return m.Name + "-maintenance" }
-func nameRedis(m *misskeyv1alpha1.Misskey) string           { return m.Name + "-redis" }
+func nameApp(m *misskeyv1alpha1.Misskey) string         { return m.Name + "-app" }
+func nameWorker(m *misskeyv1alpha1.Misskey) string      { return m.Name + "-worker" }
+func nameProxy(m *misskeyv1alpha1.Misskey) string       { return m.Name + "-proxy" }
+func nameMaintenance(m *misskeyv1alpha1.Misskey) string { return m.Name + "-maintenance" }
+func nameRedis(m *misskeyv1alpha1.Misskey) string       { return m.Name + "-redis" }
+
+// redis instance名。suffix=""はdefault(<name>-redis)、role時は<name>-redis-<suffix>
+func nameRedisInstance(m *misskeyv1alpha1.Misskey, suffix string) string {
+	if suffix == "" {
+		return nameRedis(m)
+	}
+	return nameRedis(m) + "-" + suffix
+}
+
+// HA時のsentinel Service。OT operatorが<replication名>-sentinelで生成
+func nameRedisSentinelService(m *misskeyv1alpha1.Misskey, suffix string) string {
+	return nameRedisInstance(m, suffix) + "-sentinel"
+}
+
+// redisコンポーネントlabel。default="redis"、role="redis-<suffix>"
+func redisComponent(suffix string) string {
+	if suffix == "" {
+		return "redis"
+	}
+	return "redis-" + suffix
+}
+
+// Misskeyの役割別Redis記述子。役割走査の単一ソース
+// key=CRDフィールド、nameSuffix=k8s名/component、configKey=default.yml、passEnv=external password env
+type redisRoleDesc struct {
+	key        string
+	nameSuffix string
+	configKey  string
+	passEnv    string
+	get        func(*misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole
+}
+
+var redisRoleDescs = []redisRoleDesc{
+	{"jobQueue", "jobqueue", "redisForJobQueue", "REDIS_PASSWORD_JOBQUEUE", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.JobQueue }},
+	{"pubsub", "pubsub", "redisForPubsub", "REDIS_PASSWORD_PUBSUB", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.Pubsub }},
+	{"timelines", "timelines", "redisForTimelines", "REDIS_PASSWORD_TIMELINES", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.Timelines }},
+	{"reactions", "reactions", "redisForReactions", "REDIS_PASSWORD_REACTIONS", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.Reactions }},
+}
+
 func nameMeili(m *misskeyv1alpha1.Misskey) string           { return m.Name + "-meilisearch" }
 func nameDB(m *misskeyv1alpha1.Misskey) string              { return m.Name + "-db" }
 func nameConfig(m *misskeyv1alpha1.Misskey) string          { return m.Name + "-config" }

@@ -34,6 +34,24 @@ type dbEndpoint struct {
 	user string
 }
 
+// redisHostPort: sentinelエンドポイント1件
+type redisHostPort struct {
+	host string
+	port int32
+}
+
+// redisEndpoint: 1つのredis接続先(default or role)。sentinels非空でSentinelモード
+type redisEndpoint struct {
+	host       string
+	port       int32
+	sentinels  []redisHostPort
+	masterName string
+	passSel    *corev1.SecretKeySelector // 認証secret。nilなら認証なし
+	passEnv    string                    // passSel使用時のプレースホルダenv名(REDIS_PASSWORD / REDIS_PASSWORD_<ROLE>)
+	managed    bool                      // operatorが建てる
+	ha         bool                      // Sentinel HAモード
+}
+
 // 1インスタンス分の解決済み接続パラメータを保持
 // managed/externalの分岐を平坦化し、ビルダー側で分岐不要にする
 type plan struct {
@@ -48,10 +66,9 @@ type plan struct {
 	dbSlaves       []dbEndpoint // read replica(またはroプーラー)接続先
 
 	// Redis
-	redisManaged bool
-	redisHost    string
-	redisPort    int32
-	redisPassSel *corev1.SecretKeySelector
+	redisManaged bool                     // managed redisインスタンスが1つ以上あるか(reconcile gate)
+	redisDefault redisEndpoint            // 共有redis(redis:ブロック)
+	redisRoles   map[string]redisEndpoint // 分離roleのみ(key=redisRoleDesc.key)
 
 	// MeiliSearch/検索
 	provider     misskeyv1alpha1.SearchProvider
@@ -116,15 +133,31 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 	}
 
 	// --- Redis ---
+	p.redisRoles = map[string]redisEndpoint{}
+	defaultHA := m.Spec.Redis.HA
 	if ext := m.Spec.Redis.External; ext != nil {
-		p.redisManaged = false
-		p.redisHost = ext.Host
-		p.redisPort = int32OrDefault(ext.Port, redisPort)
-		p.redisPassSel = ext.PasswordSecret
+		p.redisDefault = externalRedisEndpoint(ext, "REDIS_PASSWORD")
 	} else {
 		p.redisManaged = true
-		p.redisHost = nameRedis(m)
-		p.redisPort = redisPort
+		p.redisDefault = managedRedisEndpoint(m, "", defaultHA)
+	}
+	if roles := m.Spec.Redis.Roles; roles != nil {
+		for _, rd := range redisRoleDescs {
+			role := rd.get(roles)
+			if role == nil {
+				continue // 未分離roleはredis:にfallback(ブロックを出さない)
+			}
+			if role.External != nil {
+				p.redisRoles[rd.key] = externalRedisEndpoint(role.External, rd.passEnv)
+			} else {
+				p.redisManaged = true
+				ha := role.HA
+				if ha == nil {
+					ha = defaultHA // roleでHA未指定ならdefaultを継承
+				}
+				p.redisRoles[rd.key] = managedRedisEndpoint(m, rd.nameSuffix, ha)
+			}
+		}
 	}
 
 	// --- Search ---
@@ -174,6 +207,40 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 	}
 
 	return p
+}
+
+// externalRedisEndpoint: ExternalRedisをendpointへ。Sentinels指定でSentinelモード
+func externalRedisEndpoint(ext *misskeyv1alpha1.ExternalRedis, passEnv string) redisEndpoint {
+	ep := redisEndpoint{
+		host:    ext.Host,
+		port:    int32OrDefault(ext.Port, redisPort),
+		passSel: ext.PasswordSecret,
+		passEnv: passEnv,
+	}
+	for _, s := range ext.Sentinels {
+		ep.sentinels = append(ep.sentinels, redisHostPort{host: s.Host, port: int32OrDefault(s.Port, sentinelPort)})
+	}
+	if len(ep.sentinels) > 0 {
+		ep.masterName = ext.MasterName
+	}
+	return ep
+}
+
+// managedRedisEndpoint: operator管理redisのendpoint。HA有効でSentinelモード(sentinels+masterName)
+// managedは認証なし(intra-cluster + NetworkPolicy)
+func managedRedisEndpoint(m *misskeyv1alpha1.Misskey, suffix string, ha *misskeyv1alpha1.RedisHA) redisEndpoint {
+	if ha != nil && boolOr(ha.Enabled, true) {
+		return redisEndpoint{
+			// host/portはioredisのsentinelモードでは無視されるがMisskeyのschema上必須
+			host:       nameRedisInstance(m, suffix),
+			port:       redisPort,
+			sentinels:  []redisHostPort{{host: nameRedisSentinelService(m, suffix), port: sentinelPort}},
+			masterName: redisMasterGroup,
+			managed:    true,
+			ha:         true,
+		}
+	}
+	return redisEndpoint{host: nameRedisInstance(m, suffix), port: redisPort, managed: true}
 }
 
 // vがゼロならdef、そうでなければvを返す

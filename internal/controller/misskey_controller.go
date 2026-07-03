@@ -54,6 +54,7 @@ type MisskeyReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses;networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters;scheduledbackups;poolers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=redis.redis.opstreelabs.in,resources=redisreplications;redissentinels,verbs=get;list;watch;create;update;patch;delete
 
 // Misskeyインスタンスを望ましい状態へ収束させる
 func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -180,10 +181,9 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 			return err
 		}
 	}
-	if p.redisManaged {
-		if err := r.reconcileRedis(ctx, m); err != nil {
-			return err
-		}
+	// 常に呼ぶ(managed provisioning + external化/role削除/mode切替のcleanup)
+	if err := r.reconcileRedis(ctx, m); err != nil {
+		return err
 	}
 	if p.meiliManaged {
 		if err := r.reconcileMeilisearch(ctx, m, p); err != nil {

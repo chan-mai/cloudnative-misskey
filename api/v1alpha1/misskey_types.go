@@ -353,8 +353,9 @@ type RedisSpec struct {
 	// +optional
 	External *ExternalRedis `json:"external,omitempty"`
 
-	// Image for the managed Redis StatefulSet.
-	// +kubebuilder:default="redis:7-alpine"
+	// Image for the managed standalone Redis StatefulSet (HA off). Redis 8 is
+	// AGPLv3-licensed, matching this project.
+	// +kubebuilder:default="redis:8-alpine"
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -395,11 +396,102 @@ type RedisSpec struct {
 	// Resources for the managed Redis container.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// HA enables operator-managed Sentinel HA (CloudNativePG-style, via the
+	// OT-CONTAINER-KIT redis-operator) for managed Redis instances instead of a
+	// single-pod StatefulSet. Requires the redis-operator installed in the cluster.
+	// +optional
+	HA *RedisHA `json:"ha,omitempty"`
+
+	// Roles configures per-role Redis separation. Each role (jobQueue, pubsub,
+	// timelines, reactions) can point at its own managed instance or an external
+	// Redis; an unset role falls back to the shared redis (Misskey omits the
+	// redisForXxx block, which makes Misskey reuse the main redis).
+	// +optional
+	Roles *RedisRoles `json:"roles,omitempty"`
+}
+
+// RedisHA configures operator-managed Sentinel high availability.
+type RedisHA struct {
+	// Enabled toggles HA when the block is present.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Replicas is the RedisReplication cluster size: total redis nodes
+	// (1 primary + N-1 replicas). 3 gives one primary and two replicas.
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=2
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// Sentinels is the RedisSentinel cluster size. Use an odd number for quorum.
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Sentinels int32 `json:"sentinels,omitempty"`
+
+	// Image is the redis image driven by the operator's RedisReplication.
+	// +kubebuilder:default="quay.io/opstree/redis:v8.2.5"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// SentinelImage is the redis-sentinel image for the operator's RedisSentinel.
+	// +kubebuilder:default="quay.io/opstree/redis-sentinel:v8.2.5"
+	// +optional
+	SentinelImage string `json:"sentinelImage,omitempty"`
+}
+
+// RedisRoles configures per-role Redis separation.
+type RedisRoles struct {
+	// +optional
+	JobQueue *RedisRole `json:"jobQueue,omitempty"`
+	// +optional
+	Pubsub *RedisRole `json:"pubsub,omitempty"`
+	// +optional
+	Timelines *RedisRole `json:"timelines,omitempty"`
+	// +optional
+	Reactions *RedisRole `json:"reactions,omitempty"`
+}
+
+// RedisRole separates one Misskey Redis role. Presence separates the role;
+// External points it at an existing Redis, otherwise a dedicated instance is
+// provisioned (inheriting the default redis settings unless overridden here).
+type RedisRole struct {
+	// External points this role at an existing Redis. Mutually exclusive with the
+	// managed override fields.
+	// +optional
+	External *ExternalRedis `json:"external,omitempty"`
+
+	// MaxMemory override for this role's managed instance.
+	// +optional
+	MaxMemory string `json:"maxMemory,omitempty"`
+
+	// MaxMemoryPolicy override for this role's managed instance.
+	// +optional
+	MaxMemoryPolicy string `json:"maxMemoryPolicy,omitempty"`
+
+	// Storage override for this role's managed PVC.
+	// +optional
+	Storage resource.Quantity `json:"storage,omitempty"`
+
+	// StorageClassName override for this role's managed PVC.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Resources override for this role's managed container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// HA override for this role's managed instance. Nil inherits spec.redis.ha.
+	// +optional
+	HA *RedisHA `json:"ha,omitempty"`
 }
 
 // ExternalRedis references a Redis running outside the operator's control.
 type ExternalRedis struct {
-	// Host of the external Redis.
+	// Host of the external Redis. With Sentinels set this is ignored by the
+	// client but still required by Misskey's config schema.
 	// +kubebuilder:validation:Required
 	Host string `json:"host"`
 
@@ -411,6 +503,24 @@ type ExternalRedis struct {
 	// PasswordSecret optionally references the Redis password.
 	// +optional
 	PasswordSecret *corev1.SecretKeySelector `json:"passwordSecret,omitempty"`
+
+	// Sentinels, when set, connects via Redis Sentinel (ioredis passthrough)
+	// instead of host/port.
+	// +optional
+	Sentinels []RedisHostPort `json:"sentinels,omitempty"`
+
+	// MasterName is the sentinel master group name (required with Sentinels).
+	// +optional
+	MasterName string `json:"masterName,omitempty"`
+}
+
+// RedisHostPort is a sentinel endpoint.
+type RedisHostPort struct {
+	// +kubebuilder:validation:Required
+	Host string `json:"host"`
+	// +kubebuilder:default=26379
+	// +optional
+	Port int32 `json:"port,omitempty"`
 }
 
 // SearchProvider selects the Misskey fulltext search backend.

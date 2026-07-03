@@ -31,6 +31,25 @@ import (
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
 
+// renderRedisBlock: redis / redisForXxx ブロックを出力
+// sentinels非空でSentinelモード(host/portはioredis上無視だがMisskey schema必須)
+func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
+	w("%s:\n", key)
+	w("  host: %s\n", ep.host)
+	w("  port: %d\n", ep.port)
+	if len(ep.sentinels) > 0 {
+		w("  sentinels:\n")
+		for _, s := range ep.sentinels {
+			w("    - host: %s\n", s.host)
+			w("      port: %d\n", s.port)
+		}
+		w("  name: %s\n", ep.masterName)
+	}
+	if ep.passSel != nil {
+		w("  pass: ${%s}\n", ep.passEnv)
+	}
+}
+
 // Misskeyの.config/default.ymlを生成。シークレットは${PLACEHOLDER}トークンのまま残す
 // initコンテナがpod起動時に置換するため、シークレット値がConfigMapに載らない
 func renderDefaultYML(m *misskeyv1alpha1.Misskey, p plan) string {
@@ -67,11 +86,12 @@ func renderDefaultYML(m *misskeyv1alpha1.Misskey, p plan) string {
 		w("dbReplications: false\n\n")
 	}
 
-	w("redis:\n")
-	w("  host: %s\n", p.redisHost)
-	w("  port: %d\n", p.redisPort)
-	if p.redisPassSel != nil {
-		w("  pass: ${REDIS_PASSWORD}\n")
+	renderRedisBlock(w, "redis", p.redisDefault)
+	// 分離されたroleのみredisForXxxを出力。未分離roleは省略しMisskeyがredisにfallback
+	for _, rd := range redisRoleDescs {
+		if ep, ok := p.redisRoles[rd.key]; ok {
+			renderRedisBlock(w, rd.configKey, ep)
+		}
 	}
 	w("\n")
 
