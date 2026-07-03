@@ -545,6 +545,49 @@ type PostgresSpec struct {
 	// Backup enables barmanObjectStore backups on the CNPG cluster.
 	// +optional
 	Backup *PostgresBackup `json:"backup,omitempty"`
+
+	// ReadOffload wires Misskey dbReplications onto CNPG standby replicas so reads
+	// are load-balanced off the primary. Defaults on when instances >= 2; set false
+	// to opt out.
+	// +optional
+	ReadOffload *bool `json:"readOffload,omitempty"`
+
+	// Pooler provisions CNPG PgBouncer connection poolers in front of the cluster,
+	// multiplexing app/worker connections so max_connections is not exhausted as
+	// pods scale out.
+	// +optional
+	Pooler *PostgresPooler `json:"pooler,omitempty"`
+}
+
+// PostgresPooler configures CNPG PgBouncer poolers. Presence enables them; the
+// operator creates a read-write pooler and, when read offload is active, a
+// read-only pooler.
+type PostgresPooler struct {
+	// Enabled toggles the poolers when the block is present.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Instances is the PgBouncer pod count per pooler.
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Instances int32 `json:"instances,omitempty"`
+
+	// PoolMode is the PgBouncer pool mode: transaction, session or statement.
+	// +kubebuilder:validation:Enum=transaction;session;statement
+	// +kubebuilder:default=transaction
+	// +optional
+	PoolMode string `json:"poolMode,omitempty"`
+
+	// Parameters merged into pgbouncer.parameters, e.g. max_client_conn,
+	// default_pool_size.
+	// +optional
+	Parameters map[string]string `json:"parameters,omitempty"`
+
+	// Resources for each PgBouncer pod.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // ExternalPostgres references a PostgreSQL running outside the operator.

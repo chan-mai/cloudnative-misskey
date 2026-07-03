@@ -125,7 +125,7 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 		Tolerations:               comp.Tolerations,
 		InitContainers:            misskeyInitContainers(m, p),
 		Containers:                []corev1.Container{mainContainer},
-		Volumes:                   misskeyVolumes(m),
+		Volumes:                   misskeyVolumes(m, nameConfig(m)),
 	}
 }
 
@@ -158,14 +158,15 @@ func misskeyInitContainers(m *misskeyv1alpha1.Misskey, p plan) []corev1.Containe
 	return inits
 }
 
-// misskeyVolumes: config template / rendered、builtPath有効時はbuilt emptyDir
-func misskeyVolumes(m *misskeyv1alpha1.Misskey) []corev1.Volume {
+// misskeyVolumes: config template(cfg ConfigMap) / rendered、builtPath有効時はbuilt emptyDir
+// cfgでtemplate元ConfigMapを切替(app/worker=nameConfig、migration=nameMigrateConfig)
+func misskeyVolumes(m *misskeyv1alpha1.Misskey, cfg string) []corev1.Volume {
 	vols := []corev1.Volume{
 		{
 			Name: "config-tpl",
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: nameConfig(m)},
+					LocalObjectReference: corev1.LocalObjectReference{Name: cfg},
 				},
 			},
 		},

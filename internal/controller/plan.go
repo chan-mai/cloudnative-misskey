@@ -26,16 +26,26 @@ import (
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
 
+// dbEndpoint: dbSlave1件分の接続先(pass は常に${DB_PASSWORD})
+type dbEndpoint struct {
+	host string
+	port int32
+	db   string
+	user string
+}
+
 // 1インスタンス分の解決済み接続パラメータを保持
 // managed/externalの分岐を平坦化し、ビルダー側で分岐不要にする
 type plan struct {
 	// Postgres
-	dbManaged bool
-	dbHost    string
-	dbPort    int32
-	dbName    string
-	dbUser    string
-	dbPassSel corev1.SecretKeySelector
+	dbManaged      bool
+	dbHost         string
+	dbPort         int32
+	dbName         string
+	dbUser         string
+	dbPassSel      corev1.SecretKeySelector
+	dbReplications bool         // Misskeyのread offload有効
+	dbSlaves       []dbEndpoint // read replica(またはroプーラー)接続先
 
 	// Redis
 	redisManaged bool
@@ -77,7 +87,6 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 		p.dbPassSel = ext.PasswordSecret
 	} else {
 		p.dbManaged = true
-		p.dbHost = nameDBService(m)
 		p.dbPort = postgresPort
 		p.dbName = stringOr(m.Spec.Postgres.Database, "misskey")
 		p.dbUser = stringOr(m.Spec.Postgres.Owner, "misskey")
@@ -85,6 +94,24 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 		p.dbPassSel = corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: nameDBAppSecret(m)},
 			Key:                  "password",
+		}
+
+		// pooler有効ならwrite/read経路をPgBouncerサービスへ、無効ならCNPGのrw/roサービスへ
+		usePooler := poolerEnabled(m)
+		if usePooler {
+			p.dbHost = nameDBPoolerRW(m)
+		} else {
+			p.dbHost = nameDBService(m)
+		}
+
+		// read offload: replicaが居る(instances>=2)時に自動オン。readOffload:falseでopt-out
+		if readOffloadActive(m) {
+			readHost := nameDBReadService(m)
+			if usePooler {
+				readHost = nameDBPoolerRO(m)
+			}
+			p.dbReplications = true
+			p.dbSlaves = []dbEndpoint{{host: readHost, port: postgresPort, db: p.dbName, user: p.dbUser}}
 		}
 	}
 

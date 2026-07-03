@@ -101,6 +101,7 @@ rules:
   - postgresql.cnpg.io
   resources:
   - clusters
+  - poolers
   - scheduledbackups
   verbs:
   - create

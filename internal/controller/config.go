@@ -51,7 +51,21 @@ func renderDefaultYML(m *misskeyv1alpha1.Misskey, p plan) string {
 	w("  db: %s\n", p.dbName)
 	w("  user: %s\n", p.dbUser)
 	w("  pass: ${DB_PASSWORD}\n")
-	w("dbReplications: false\n\n")
+	// read offload時のみdbReplications+dbSlavesを配線。slaveのpassも同一appの${DB_PASSWORD}
+	if p.dbReplications {
+		w("dbReplications: true\n")
+		w("dbSlaves:\n")
+		for _, s := range p.dbSlaves {
+			w("  - host: %s\n", s.host)
+			w("    port: %d\n", s.port)
+			w("    db: %s\n", s.db)
+			w("    user: %s\n", s.user)
+			w("    pass: ${DB_PASSWORD}\n")
+		}
+		w("\n")
+	} else {
+		w("dbReplications: false\n\n")
+	}
 
 	w("redis:\n")
 	w("  host: %s\n", p.redisHost)
@@ -82,6 +96,18 @@ func renderDefaultYML(m *misskeyv1alpha1.Misskey, p plan) string {
 		w("\n# --- extraConfig ---\n%s\n", strings.TrimRight(m.Spec.ExtraConfig, "\n"))
 	}
 	return b.String()
+}
+
+// migratePlan: migration用にpを複製し、DB経路をprimary直結・no-replicationへ倒す
+// managedではpooler(-pooler-rw)を迂回し-rwへ。externalはhostそのまま
+func migratePlan(m *misskeyv1alpha1.Misskey, p plan) plan {
+	mp := p
+	if p.dbManaged {
+		mp.dbHost = nameDBService(m)
+	}
+	mp.dbReplications = false
+	mp.dbSlaves = nil
+	return mp
 }
 
 // appの前段に置くリバースプロキシのCaddyfileを生成
@@ -188,6 +214,19 @@ func (r *MisskeyReconciler) reconcileConfigMaps(ctx context.Context, m *misskeyv
 		if boolOr(m.Spec.Proxy.Enabled, true) {
 			cm.Data["Caddyfile"] = renderCaddyfile(m)
 			cm.Data["maintenance.Caddyfile"] = renderMaintenanceCaddyfile()
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// migration専用config: pooler/replicaを迂回しprimary(-rw)へ直結、dbReplications無効
+	// poolMode=transactionのPgBouncer越しやreplica lagにmigration DDLを晒さない不変条件
+	migrateCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: nameMigrateConfig(m), Namespace: m.Namespace}}
+	if err := r.apply(ctx, m, migrateCM, func() error {
+		migrateCM.Labels = labelsFor(m, "config")
+		migrateCM.Data = map[string]string{
+			"default.yml": renderDefaultYML(m, migratePlan(m, p)),
 		}
 		return nil
 	}); err != nil {

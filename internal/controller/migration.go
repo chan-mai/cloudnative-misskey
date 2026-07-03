@@ -47,7 +47,7 @@ func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan) *batchv1.Job {
 			Resources:       resourcesOr(corev1.ResourceRequirements{}, "100m", "400Mi", "800Mi"),
 			VolumeMounts:    misskeyConfigMounts(m),
 		}},
-		Volumes: misskeyVolumes(m),
+		Volumes: misskeyVolumes(m, nameMigrateConfig(m)),
 	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: nameMigrate(m), Namespace: m.Namespace, Labels: labelsFor(m, "migrate")},

@@ -112,7 +112,9 @@ func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *mis
 			}},
 		}
 		frontend.Spec.PolicyTypes = []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}
-		frontend.Spec.Egress = append(common, publicEgressRule())
+		// CNPGはpooler podのapp.kubernetes.io/instanceをクラスタ名で上書きするためintra-instance則に載らない
+		// cnpg.io/clusterでdb/pooler pod宛egressを別途許可(app/worker→pooler-rw/ro疎通)
+		frontend.Spec.Egress = append(common, dbEgressRule(m), publicEgressRule())
 		return nil
 	}); err != nil {
 		return err
@@ -153,6 +155,17 @@ func egressCommonRules(m *misskeyv1alpha1.Misskey) []networkingv1.NetworkPolicyE
 		})
 	}
 	return rules
+}
+
+// dbEgressRule: CNPGクラスタ配下のpod(db instance + pooler)宛egressを許可
+// pooler podはCNPGがapp.kubernetes.io/instanceを上書きするためinstanceLabelでは拾えず、
+// CNPG固有のcnpg.io/clusterで選択する。managed DB専用(externalはnameDBのクラスタ不在でno-op)
+func dbEgressRule(m *misskeyv1alpha1.Misskey) networkingv1.NetworkPolicyEgressRule {
+	return networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{{
+			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"cnpg.io/cluster": nameDB(m)}},
+		}},
+	}
 }
 
 // publicEgressRule: private/link-local(metadata)を除くpublicへのegress

@@ -108,6 +108,16 @@ func imageHash(image string) string {
 // CNPGが生成するクラスタのread-writeサービス
 func nameDBService(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-rw" }
 
+// CNPGが生成するクラスタのread-onlyサービス(standby replicaへLB)
+func nameDBReadService(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-ro" }
+
+// CNPG PgBouncer poolerの名前(=生成Service名)。rw=書込経路、ro=読取経路
+func nameDBPoolerRW(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-pooler-rw" }
+func nameDBPoolerRO(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-pooler-ro" }
+
+// migration専用のconfig ConfigMap。migrationはprimary直結・no-replicationで別config
+func nameMigrateConfig(m *misskeyv1alpha1.Misskey) string { return m.Name + "-migrate-config" }
+
 // CNPGが生成するクラスタのアプリ認証情報Secret
 func nameDBAppSecret(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-app" }
 

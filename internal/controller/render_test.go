@@ -413,3 +413,160 @@ func TestBuildPodSpecRuntime(t *testing.T) {
 		t.Error("builtPath=空でprepare-buildが残っている")
 	}
 }
+
+func TestReadOffloadAuto(t *testing.T) {
+	// instances>=2でread offload自動オン、slaveは-roサービス(pooler無し)
+	m := newMisskey()
+	m.Spec.Postgres.Instances = 2
+	p := resolve(m)
+	if p.dbHost != "example-db-rw" {
+		t.Errorf("write host should stay -rw without pooler: %q", p.dbHost)
+	}
+	if !p.dbReplications || len(p.dbSlaves) != 1 || p.dbSlaves[0].host != "example-db-ro" {
+		t.Errorf("read offload not wired to -ro: replications=%v slaves=%+v", p.dbReplications, p.dbSlaves)
+	}
+	if p.dbSlaves[0].db != "misskey" || p.dbSlaves[0].user != "misskey" || p.dbSlaves[0].port != 5432 {
+		t.Errorf("dbSlave endpoint wrong: %+v", p.dbSlaves[0])
+	}
+}
+
+func TestReadOffloadSingleInstance(t *testing.T) {
+	// instances=1(既定)はreplica不在。read offloadしない
+	p := resolve(newMisskey())
+	if p.dbReplications || len(p.dbSlaves) != 0 {
+		t.Errorf("single instance must not offload reads: %+v", p)
+	}
+}
+
+func TestReadOffloadOptOut(t *testing.T) {
+	// instances>=2でもreadOffload:falseで明示オプトアウト
+	m := newMisskey()
+	m.Spec.Postgres.Instances = 2
+	m.Spec.Postgres.ReadOffload = boolPtr(false)
+	p := resolve(m)
+	if p.dbReplications || len(p.dbSlaves) != 0 {
+		t.Errorf("readOffload=false must disable offload: %+v", p)
+	}
+}
+
+func TestResolvePoolerHosts(t *testing.T) {
+	// pooler有効: writeはrwプーラー、readはroプーラーへ
+	m := newMisskey()
+	m.Spec.Postgres.Instances = 2
+	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	p := resolve(m)
+	if p.dbHost != "example-db-pooler-rw" {
+		t.Errorf("write host should be rw pooler: %q", p.dbHost)
+	}
+	if !p.dbReplications || len(p.dbSlaves) != 1 || p.dbSlaves[0].host != "example-db-pooler-ro" {
+		t.Errorf("read host should be ro pooler: %+v", p.dbSlaves)
+	}
+}
+
+func TestResolvePoolerNoOffload(t *testing.T) {
+	// pooler有効・instances=1: writeはrwプーラー、read offloadはしない(roプーラー不要)
+	m := newMisskey()
+	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	p := resolve(m)
+	if p.dbHost != "example-db-pooler-rw" {
+		t.Errorf("write host should be rw pooler: %q", p.dbHost)
+	}
+	if p.dbReplications || len(p.dbSlaves) != 0 {
+		t.Errorf("no replica → no offload: %+v", p)
+	}
+}
+
+func TestRenderDefaultYMLReadOffload(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Postgres.Instances = 2
+	out := renderDefaultYML(m, resolve(m))
+	for _, s := range []string{"dbReplications: true", "dbSlaves:", "host: example-db-ro", "pass: ${DB_PASSWORD}"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("read-offload default.yml missing %q\n---\n%s", s, out)
+		}
+	}
+	// 単一インスタンスはdbReplications: falseのまま
+	if strings.Contains(renderDefaultYML(newMisskey(), resolve(newMisskey())), "dbReplications: true") {
+		t.Error("single instance must render dbReplications: false")
+	}
+}
+
+func TestMigratePlanPrimaryDirect(t *testing.T) {
+	// pooler+offload構成でも、migrationはprimary(-rw)直結・no-replication
+	m := newMisskey()
+	m.Spec.Postgres.Instances = 2
+	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	mp := migratePlan(m, resolve(m))
+	if mp.dbHost != "example-db-rw" {
+		t.Errorf("migration must bypass pooler to -rw: %q", mp.dbHost)
+	}
+	if mp.dbReplications || len(mp.dbSlaves) != 0 {
+		t.Errorf("migration must not use replicas: %+v", mp)
+	}
+	out := renderDefaultYML(m, mp)
+	if !strings.Contains(out, "host: example-db-rw") || !strings.Contains(out, "dbReplications: false") {
+		t.Errorf("migrate config not primary-direct:\n%s", out)
+	}
+}
+
+func TestBuildPooler(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{
+		Instances:  3,
+		Parameters: map[string]string{"default_pool_size": "50"},
+	}
+	pooler := buildPooler(m, nameDBPoolerRW(m), "rw")
+
+	if pooler.GetName() != "example-db-pooler-rw" || pooler.GetKind() != "Pooler" {
+		t.Errorf("pooler identity wrong: %s/%s", pooler.GetKind(), pooler.GetName())
+	}
+	spec := pooler.Object["spec"].(map[string]any)
+	if spec["type"] != "rw" {
+		t.Errorf("type: %v", spec["type"])
+	}
+	if spec["instances"] != int64(3) {
+		t.Errorf("instances: %v", spec["instances"])
+	}
+	if cl := spec["cluster"].(map[string]any); cl["name"] != "example-db" {
+		t.Errorf("cluster name: %v", cl["name"])
+	}
+	pgb := spec["pgbouncer"].(map[string]any)
+	if pgb["poolMode"] != "transaction" {
+		t.Errorf("poolMode default: %v", pgb["poolMode"])
+	}
+	params := pgb["parameters"].(map[string]any)
+	if params["max_client_conn"] != "1000" || params["default_pool_size"] != "50" {
+		t.Errorf("params merge wrong: %+v", params)
+	}
+	// pooler podは既存NetworkPolicyがintra扱いするためinstance/componentラベル必須
+	labels := spec["template"].(map[string]any)["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels["app.kubernetes.io/instance"] != "example" || labels["app.kubernetes.io/component"] != "postgres-pooler" {
+		t.Errorf("pooler pod labels missing instance/component: %+v", labels)
+	}
+}
+
+func TestPoolerHelpers(t *testing.T) {
+	m := newMisskey()
+	if poolerEnabled(m) {
+		t.Error("pooler未指定はdisabled")
+	}
+	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	if !poolerEnabled(m) {
+		t.Error("pooler指定(既定)はenabled")
+	}
+	m.Spec.Postgres.Pooler.Enabled = boolPtr(false)
+	if poolerEnabled(m) {
+		t.Error("enabled=falseでdisabled")
+	}
+}
+
+func TestDBEgressRule(t *testing.T) {
+	// CNPGがpooler podのinstance labelを上書きするため、cnpg.io/clusterでdb/pooler宛egressを許可
+	rule := dbEgressRule(newMisskey())
+	if len(rule.To) != 1 || rule.To[0].PodSelector == nil {
+		t.Fatalf("dbEgressRule should target a pod selector: %+v", rule)
+	}
+	if got := rule.To[0].PodSelector.MatchLabels["cnpg.io/cluster"]; got != "example-db" {
+		t.Errorf("egress must select cnpg.io/cluster=example-db, got %q", got)
+	}
+}

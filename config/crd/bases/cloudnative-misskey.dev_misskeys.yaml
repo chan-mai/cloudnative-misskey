@@ -433,6 +433,105 @@ spec:
                     description: Parameters merged into postgresql.parameters of the
                       CNPG cluster.
                     type: object
+                  pooler:
+                    description: |-
+                      Pooler provisions CNPG PgBouncer connection poolers in front of the cluster,
+                      multiplexing app/worker connections so max_connections is not exhausted as
+                      pods scale out.
+                    properties:
+                      enabled:
+                        default: true
+                        description: Enabled toggles the poolers when the block is
+                          present.
+                        type: boolean
+                      instances:
+                        default: 2
+                        description: Instances is the PgBouncer pod count per pooler.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      parameters:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Parameters merged into pgbouncer.parameters, e.g. max_client_conn,
+                          default_pool_size.
+                        type: object
+                      poolMode:
+                        default: transaction
+                        description: 'PoolMode is the PgBouncer pool mode: transaction,
+                          session or statement.'
+                        enum:
+                        - transaction
+                        - session
+                        - statement
+                        type: string
+                      resources:
+                        description: Resources for each PgBouncer pod.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                    type: object
+                  readOffload:
+                    description: |-
+                      ReadOffload wires Misskey dbReplications onto CNPG standby replicas so reads
+                      are load-balanced off the primary. Defaults on when instances >= 2; set false
+                      to opt out.
+                    type: boolean
                   resources:
                     description: Resources for each CNPG instance.
                     properties:

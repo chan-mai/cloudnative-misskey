@@ -34,7 +34,20 @@ var (
 	cnpgScheduledBackupGVK = schema.GroupVersionKind{
 		Group: "postgresql.cnpg.io", Version: "v1", Kind: "ScheduledBackup",
 	}
+	cnpgPoolerGVK = schema.GroupVersionKind{
+		Group: "postgresql.cnpg.io", Version: "v1", Kind: "Pooler",
+	}
 )
+
+// poolerEnabled: spec.postgres.poolerが在ればenabled(default true)
+func poolerEnabled(m *misskeyv1alpha1.Misskey) bool {
+	return m.Spec.Postgres.Pooler != nil && boolOr(m.Spec.Postgres.Pooler.Enabled, true)
+}
+
+// readOffloadActive: replicaが居る(instances>=2)かつreadOffloadがopt-outされていない
+func readOffloadActive(m *misskeyv1alpha1.Misskey) bool {
+	return int32OrDefault(m.Spec.Postgres.Instances, 1) >= 2 && boolOr(m.Spec.Postgres.ReadOffload, true)
+}
 
 // managedデータベース用にCNPG Cluster(とScheduledBackup)を作成/更新
 // spec.postgres.external設定時はno-op
@@ -140,4 +153,82 @@ func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1a
 		"cluster":              map[string]any{"name": nameDB(m)},
 	}
 	return r.applySSA(ctx, m, sb)
+}
+
+// reconcilePoolers: pooler有効時にrw(書込)と、read offload有効時ro(読取)のCNPG Poolerをapply
+// 無効化/instances<2へのdowngrade時は該当プーラーをcleanup
+func (r *MisskeyReconciler) reconcilePoolers(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+	// rwプーラー: pooler有効時
+	if poolerEnabled(m) {
+		if err := r.applySSA(ctx, m, buildPooler(m, nameDBPoolerRW(m), "rw")); err != nil {
+			return err
+		}
+	} else if err := r.deletePooler(ctx, m, nameDBPoolerRW(m)); err != nil {
+		return err
+	}
+
+	// roプーラー: pooler有効かつreplicaへread offloadする時のみ
+	if poolerEnabled(m) && readOffloadActive(m) {
+		return r.applySSA(ctx, m, buildPooler(m, nameDBPoolerRO(m), "ro"))
+	}
+	return r.deletePooler(ctx, m, nameDBPoolerRO(m))
+}
+
+// buildPooler: 指定type(rw/ro)のCNPG Pooler unstructuredを生成
+// 呼び出し側でPooler != nilを保証
+func buildPooler(m *misskeyv1alpha1.Misskey, name, poolerType string) *unstructured.Unstructured {
+	pc := m.Spec.Postgres.Pooler
+
+	// PgBouncerパラメータ: デフォルトにユーザー指定をmerge
+	params := map[string]any{
+		"max_client_conn":   "1000",
+		"default_pool_size": "25",
+	}
+	for k, v := range pc.Parameters {
+		params[k] = v
+	}
+
+	// pooler podへlabel付与。CNPGはapp.kubernetes.io/{name,instance,component,managed-by}を
+	// クラスタ名等で上書きするが、tenant等の独自labelは残りobservability/tenant集計に効く
+	// NP到達性はinstance labelに頼れないためtenancy.goがcnpg.io/clusterで別途許可
+	podLabels := map[string]any{}
+	for k, v := range labelsFor(m, "postgres-pooler") {
+		podLabels[k] = v
+	}
+	template := map[string]any{
+		"metadata": map[string]any{"labels": podLabels},
+	}
+	if res, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pc.Resources); err == nil && len(res) > 0 {
+		template["spec"] = map[string]any{
+			"containers": []any{map[string]any{"name": "pgbouncer", "resources": res}},
+		}
+	}
+
+	spec := map[string]any{
+		"cluster":   map[string]any{"name": nameDB(m)},
+		"instances": int64(int32OrDefault(pc.Instances, 2)),
+		"type":      poolerType,
+		"template":  template,
+		"pgbouncer": map[string]any{
+			"poolMode":   stringOr(pc.PoolMode, "transaction"),
+			"parameters": params,
+		},
+	}
+
+	pooler := &unstructured.Unstructured{}
+	pooler.SetGroupVersionKind(cnpgPoolerGVK)
+	pooler.SetName(name)
+	pooler.SetNamespace(m.Namespace)
+	pooler.SetLabels(labelsFor(m, "postgres-pooler"))
+	pooler.Object["spec"] = spec
+	return pooler
+}
+
+// deletePooler: 指定名のPoolerが在れば削除(無効化/downgrade時のcleanup)
+func (r *MisskeyReconciler) deletePooler(ctx context.Context, m *misskeyv1alpha1.Misskey, name string) error {
+	p := &unstructured.Unstructured{}
+	p.SetGroupVersionKind(cnpgPoolerGVK)
+	p.SetName(name)
+	p.SetNamespace(m.Namespace)
+	return r.deleteIfExists(ctx, p)
 }
