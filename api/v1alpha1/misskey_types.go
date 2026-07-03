@@ -87,6 +87,14 @@ type MisskeySpec struct {
 	// Use it for settings not modeled by this CRD.
 	// +optional
 	ExtraConfig string `json:"extraConfig,omitempty"`
+
+	// NetworkIsolation creates a NetworkPolicy limiting ingress to this instance's
+	// backend pods (app/worker/redis/meilisearch) to intra-instance traffic. The
+	// public entry (proxy, or app when the proxy is disabled) stays reachable.
+	// Only effective on CNIs that enforce NetworkPolicy.
+	// +kubebuilder:default=true
+	// +optional
+	NetworkIsolation *bool `json:"networkIsolation,omitempty"`
 }
 
 // SetupPasswordSpec configures the Misskey initial-setup password.

@@ -167,6 +167,10 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 	if err := r.reconcileConfigMaps(ctx, m, p); err != nil {
 		return err
 	}
+	// 隔離はpod作成前に
+	if err := r.reconcileTenancy(ctx, m); err != nil {
+		return err
+	}
 	if p.dbManaged {
 		if err := r.reconcilePostgres(ctx, m); err != nil {
 			return err

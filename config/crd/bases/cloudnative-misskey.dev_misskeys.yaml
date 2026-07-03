@@ -236,6 +236,14 @@ spec:
                       named secret. Optional.
                     type: string
                 type: object
+              networkIsolation:
+                default: true
+                description: |-
+                  NetworkIsolation creates a NetworkPolicy limiting ingress to this instance's
+                  backend pods (app/worker/redis/meilisearch) to intra-instance traffic. The
+                  public entry (proxy, or app when the proxy is disabled) stays reachable.
+                  Only effective on CNIs that enforce NetworkPolicy.
+                type: boolean
               postgres:
                 description: Postgres configures the PostgreSQL backend (CNPG-managed
                   or external).
