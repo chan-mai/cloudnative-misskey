@@ -87,6 +87,17 @@ func nameConfig(m *misskeyv1alpha1.Misskey) string          { return m.Name + "-
 func nameMaintenanceHTML(m *misskeyv1alpha1.Misskey) string { return m.Name + "-maintenance-html" }
 func nameSetup(m *misskeyv1alpha1.Misskey) string           { return m.Name + "-setup" }
 
+// version-scopedなmigration Job名。image変更で別Job
+func nameMigrate(m *misskeyv1alpha1.Misskey) string {
+	return m.Name + "-migrate-" + imageHash(m.Spec.Image)
+}
+
+// image文字列のsha256先頭10hex
+func imageHash(image string) string {
+	h := sha256.Sum256([]byte(image))
+	return hex.EncodeToString(h[:])[:10]
+}
+
 // CNPGが生成するクラスタのread-writeサービス
 func nameDBService(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-rw" }
 

@@ -101,21 +101,15 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 	}
 
 	mainContainer := corev1.Container{
-		Name:            role,
-		Image:           m.Spec.Image,
+		Name:  role,
+		Image: m.Spec.Image,
+		// migrationはmigration Jobに一本化。既定CMDのmigrateandstartを使わずstartのみ
+		Command:         []string{"pnpm", "run", "start"},
 		SecurityContext: restrictedContainerSecurityContext(),
 		Resources:       res,
 		Env:             env,
 		Ports:           ports,
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "config-rendered",
-				MountPath: "/misskey/.config/default.yml",
-				SubPath:   "default.yml",
-				ReadOnly:  true,
-			},
-			{Name: "built-volume", MountPath: "/misskey/built"},
-		},
+		VolumeMounts:    misskeyConfigMounts(),
 	}
 	// appはHTTPを提供するため、readinessと再起動をMisskeyのヘルスエンドポイントで制御
 	// startupProbeが遅い初回起動(DBマイグレーション)を吸収
@@ -133,42 +127,59 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 		TopologySpreadConstraints: spread,
 		NodeSelector:              comp.NodeSelector,
 		Tolerations:               comp.Tolerations,
-		InitContainers: []corev1.Container{
-			{
-				// built/を書込可能なemptyDirにコピー。Misskeyが起動時に書き込む場合あり
-				Name:            "prepare-built",
-				Image:           m.Spec.Image,
-				Command:         []string{"sh", "-c", "cp -r /misskey/built/. /tmp/built/"},
-				SecurityContext: restrictedContainerSecurityContext(),
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: "built-volume", MountPath: "/tmp/built"},
-				},
+		InitContainers:            misskeyInitContainers(m, p),
+		Containers:                []corev1.Container{mainContainer},
+		Volumes:                   misskeyVolumes(m),
+	}
+}
+
+// misskeyInitContainers: built/をwritable emptyDirへコピー + default.ymlのプレースホルダ展開
+// app/worker/migration Jobで共用
+func misskeyInitContainers(m *misskeyv1alpha1.Misskey, p plan) []corev1.Container {
+	return []corev1.Container{
+		{
+			// built/を書込可能なemptyDirにコピー。compile-config等が書くため
+			Name:            "prepare-built",
+			Image:           m.Spec.Image,
+			Command:         []string{"sh", "-c", "cp -r /misskey/built/. /tmp/built/"},
+			SecurityContext: restrictedContainerSecurityContext(),
+			VolumeMounts:    []corev1.VolumeMount{{Name: "built-volume", MountPath: "/tmp/built"}},
+		},
+		{
+			// default.ymlの${...}をリテラル置換で展開(シェル・正規表現なし)
+			Name:            "render-config",
+			Image:           m.Spec.Image,
+			Command:         []string{"node", "-e", renderConfigScript},
+			Env:             renderInitEnv(p),
+			SecurityContext: restrictedContainerSecurityContext(),
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "config-tpl", MountPath: "/tpl"},
+				{Name: "config-rendered", MountPath: "/shared"},
 			},
-			{
-				// pod起動時にdefault.ymlの${...}シークレットプレースホルダをリテラル置換(シェル・正規表現なし)で展開し、シークレット値中の任意文字が壊れ・インジェクションを起こさないようにする
-				Name:            "render-config",
-				Image:           m.Spec.Image,
-				Command:         []string{"node", "-e", renderConfigScript},
-				Env:             renderInitEnv(p),
-				SecurityContext: restrictedContainerSecurityContext(),
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: "config-tpl", MountPath: "/tpl"},
-					{Name: "config-rendered", MountPath: "/shared"},
+		},
+	}
+}
+
+// misskeyVolumes: config template / rendered / built の3volume
+func misskeyVolumes(m *misskeyv1alpha1.Misskey) []corev1.Volume {
+	return []corev1.Volume{
+		{
+			Name: "config-tpl",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: nameConfig(m)},
 				},
 			},
 		},
-		Containers: []corev1.Container{mainContainer},
-		Volumes: []corev1.Volume{
-			{
-				Name: "config-tpl",
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{Name: nameConfig(m)},
-					},
-				},
-			},
-			{Name: "config-rendered", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-			{Name: "built-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		},
+		{Name: "config-rendered", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "built-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+}
+
+// misskeyConfigMount: default.ymlをread-onlyで、built/をwritableでマウント(main container用)
+func misskeyConfigMounts() []corev1.VolumeMount {
+	return []corev1.VolumeMount{
+		{Name: "config-rendered", MountPath: "/misskey/.config/default.yml", SubPath: "default.yml", ReadOnly: true},
+		{Name: "built-volume", MountPath: "/misskey/built"},
 	}
 }

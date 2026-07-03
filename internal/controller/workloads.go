@@ -71,10 +71,10 @@ func setDeployment(dep *appsv1.Deployment, m *misskeyv1alpha1.Misskey, component
 	dep.Spec.Template.Spec = pod
 }
 
-// appのServiceとDeploymentを作成/更新
-func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+// app Service(常時)。app Deployment未作成でもproxyのtarget先になる
+func (r *MisskeyReconciler) reconcileAppService(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameApp(m), Namespace: m.Namespace}}
-	if err := r.apply(ctx, m, svc, func() error {
+	return r.apply(ctx, m, svc, func() error {
 		svc.Labels = labelsFor(m, roleApp)
 		svc.Spec.Selector = selectorFor(m, roleApp)
 		svc.Spec.Ports = []corev1.ServicePort{{
@@ -83,10 +83,11 @@ func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1alpha1
 			TargetPort: intstr.FromInt32(misskeyPort),
 		}}
 		return nil
-	}); err != nil {
-		return err
-	}
+	})
+}
 
+// app Deployment+PDB。MigrationComplete後にのみ呼ぶ
+func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameApp(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
 		pod := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)

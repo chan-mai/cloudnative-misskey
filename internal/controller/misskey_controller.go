@@ -22,10 +22,12 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -46,6 +48,7 @@ type MisskeyReconciler struct {
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeys/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeys/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses;networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
@@ -98,6 +101,21 @@ func (r *MisskeyReconciler) assessReady(ctx context.Context, m *misskeyv1alpha1.
 	return false, "Progressing", msg
 }
 
+// databaseReady: managed CNPGのstatus.readyInstances>=spec.instances、external=true
+func (r *MisskeyReconciler) databaseReady(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) bool {
+	if !p.dbManaged {
+		return true
+	}
+	cluster := &unstructured.Unstructured{}
+	cluster.SetGroupVersionKind(cnpgClusterGVK)
+	if err := r.Get(ctx, types.NamespacedName{Name: nameDB(m), Namespace: m.Namespace}, cluster); err != nil {
+		return false
+	}
+	ready, _, _ := unstructured.NestedInt64(cluster.Object, "status", "readyInstances")
+	desired := int64(int32OrDefault(m.Spec.Postgres.Instances, 1))
+	return desired > 0 && ready >= desired
+}
+
 // 全子リソースを依存順に生成
 func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
 	p := resolve(m)
@@ -131,11 +149,23 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 			return err
 		}
 	}
-	if err := r.reconcileApp(ctx, m, p); err != nil {
+	// app Serviceは常時。app/worker DeploymentはDB ready+migration完了までgate
+	if err := r.reconcileAppService(ctx, m); err != nil {
 		return err
 	}
-	if err := r.reconcileWorker(ctx, m, p); err != nil {
-		return err
+	if r.databaseReady(ctx, m, p) {
+		complete, err := r.reconcileMigration(ctx, m, p)
+		if err != nil {
+			return err
+		}
+		if complete {
+			if err := r.reconcileApp(ctx, m, p); err != nil {
+				return err
+			}
+			if err := r.reconcileWorker(ctx, m, p); err != nil {
+				return err
+			}
+		}
 	}
 	if boolOr(m.Spec.Proxy.Enabled, true) {
 		if err := r.reconcileProxy(ctx, m); err != nil {
@@ -197,6 +227,7 @@ func (r *MisskeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&misskeyv1alpha1.Misskey{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
