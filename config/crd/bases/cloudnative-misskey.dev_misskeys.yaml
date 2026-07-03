@@ -168,6 +168,28 @@ spec:
                       type: object
                     type: array
                 type: object
+              egressIsolation:
+                description: EgressIsolation configures egress isolation (opt-in).
+                  See EgressIsolationSpec.
+                properties:
+                  allowedNamespaces:
+                    description: |-
+                      AllowedNamespaces are additional egress-permitted namespace names on any
+                      port, e.g. an in-cluster SMTP relay or object store.
+                    items:
+                      type: string
+                    type: array
+                  dnsNamespace:
+                    default: kube-system
+                    description: |-
+                      DNSNamespace runs the cluster DNS (CoreDNS), allowed on :53. Defaults to
+                      kube-system.
+                    type: string
+                  enabled:
+                    description: Enabled creates the egress NetworkPolicies. Default
+                      false (opt-in).
+                    type: boolean
+                type: object
               extraConfig:
                 description: |-
                   ExtraConfig is raw YAML appended verbatim to the generated default.yml.

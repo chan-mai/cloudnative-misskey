@@ -104,6 +104,10 @@ type MisskeySpec struct {
 	// +optional
 	NetworkIsolation NetworkIsolationSpec `json:"networkIsolation,omitempty"`
 
+	// EgressIsolation configures egress isolation (opt-in). See EgressIsolationSpec.
+	// +optional
+	EgressIsolation EgressIsolationSpec `json:"egressIsolation,omitempty"`
+
 	// Tenancy configures namespace-scoped isolation, assuming the namespace is
 	// dedicated to this instance.
 	// +optional
@@ -126,6 +130,30 @@ type NetworkIsolationSpec struct {
 	// kubernetes.io/metadata.name label) permitted to reach the isolated backend
 	// pods in addition to intra-instance traffic, e.g. a monitoring namespace for
 	// Prometheus scraping.
+	// +optional
+	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+}
+
+// EgressIsolationSpec configures per-instance egress NetworkPolicies (opt-in).
+// app/worker must reach the whole Fediverse, so egress cannot be restricted by
+// destination; the value here is blocking private ranges (RFC1918, link-local
+// metadata) and the cluster-internal network, i.e. SSRF and lateral-movement
+// hardening. app/worker keep public-internet egress; redis/meilisearch/proxy/
+// maintenance get intra-instance + DNS only. PostgreSQL is excluded (delegated
+// to CNPG). Only effective on CNIs that enforce egress policy.
+type EgressIsolationSpec struct {
+	// Enabled creates the egress NetworkPolicies. Default false (opt-in).
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// DNSNamespace runs the cluster DNS (CoreDNS), allowed on :53. Defaults to
+	// kube-system.
+	// +kubebuilder:default="kube-system"
+	// +optional
+	DNSNamespace string `json:"dnsNamespace,omitempty"`
+
+	// AllowedNamespaces are additional egress-permitted namespace names on any
+	// port, e.g. an in-cluster SMTP relay or object store.
 	// +optional
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }

@@ -120,6 +120,8 @@ spec:
 | `ingress.className` | `nginx` | ingressClassName |
 | `networkIsolation.enabled` | `true` | backend(app/worker/redis/meili)へのingressをintra-instanceに限る。公開入口(proxy)とpostgres(CNPGに委任)は対象外 |
 | `networkIsolation.allowedNamespaces` | (なし) | backendへの到達を追加で許すnamespace名。監視namespaceからのscrape等 |
+| `egressIsolation.enabled` | `false` | egress隔離(opt-in)。app/workerはpublic可、他backendはintra+DNSのみ。postgresは除外 |
+| `egressIsolation.dnsNamespace` | `kube-system` | egress隔離時に`:53`を許すDNS namespace |
 | `tenancy.dedicated` | `false` | namespace占有宣言。`quota`(ResourceQuota)/`limitRange`(LimitRange)生成の前提 |
 | `extraConfig` | (なし) | `default.yml`末尾に追記する生YAML |
 
@@ -154,7 +156,7 @@ make fmt vet
 - CNPGの`Cluster`はServer-Side Applyで管理し、CNPG側が補完したフィールドは保持します。ただしCNPG Clusterをwatchしていないため、外部ドリフトの是正は次回reconcile/resync時になります。
 - statusはappの可用性で`Ready`/`Phase`を判定します。worker/Redis/MeiliSearch/DBの集約までは行いません。
 - `url`/`idGenerationMethod`/`tenant`のimmutable検証を行うvalidating webhookは未実装です。`tenant`は設定後の変更をCELで弾きますが、未設定から初回設定するケースは素通りするため、生成時に確定させてください。
-- 隔離NetworkPolicyはingressのみで、egressは未制御です。app podからKubernetes APIや他namespace、外部への到達は自由です。テナント境界を厳格化するにはegressのdefault-denyと必要先(DNS/DB/Redis/MeiliSearch/外部HTTPS)のallowが要りますが、未実装です。
+- egress隔離は`spec.egressIsolation.enabled`でopt-inです(既定off)。有効時、app/workerはDNS+intra-instance+public(private/link-local除く)、他backendはDNS+intra-instanceのみに制限し、SSRF/横移動を抑止します。app/workerは連合のため外向きpublicは開けるので、目的は外向き遮断ではなく内部到達の遮断です。DNS namespaceは`egressIsolation.dnsNamespace`(既定`kube-system`)で指定します。
 - PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`networkIsolation.allowedNamespaces`で明示的に開けてください。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
 - シークレットの値だけを更新(ローテーション)してもPodは再起動しません。ローリング判定のchecksumはプレースホルダ入りの`default.yml`本文基準で、値の変化を見ないためです。参照Secretの`resourceVersion`をchecksumに含める拡張は可能です。

@@ -23,16 +23,24 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
 
-const instanceLabel = "app.kubernetes.io/instance"
+const (
+	instanceLabel  = "app.kubernetes.io/instance"
+	componentLabel = "app.kubernetes.io/component"
+	nsNameLabel    = "kubernetes.io/metadata.name"
+)
 
-// reconcileTenancy: instance隔離NetworkPolicyと、専用namespace前提のResourceQuota/LimitRange
+// reconcileTenancy: instance隔離(ingress/egress)と、専用namespace前提のResourceQuota/LimitRange
 func (r *MisskeyReconciler) reconcileTenancy(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
 	if err := r.reconcileNetworkIsolation(ctx, m); err != nil {
+		return err
+	}
+	if err := r.reconcileEgressIsolation(ctx, m); err != nil {
 		return err
 	}
 	if err := r.reconcileResourceQuota(ctx, m); err != nil {
@@ -59,7 +67,7 @@ func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *mi
 	}
 	for _, ns := range m.Spec.NetworkIsolation.AllowedNamespaces {
 		from = append(from, networkingv1.NetworkPolicyPeer{
-			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": ns}},
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: ns}},
 		})
 	}
 	return r.apply(ctx, m, np, func() error {
@@ -67,7 +75,7 @@ func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *mi
 		np.Spec.PodSelector = metav1.LabelSelector{
 			MatchLabels: map[string]string{instanceLabel: m.Name},
 			MatchExpressions: []metav1.LabelSelectorRequirement{{
-				Key:      "app.kubernetes.io/component",
+				Key:      componentLabel,
 				Operator: metav1.LabelSelectorOpNotIn,
 				Values:   []string{publicEntry, "postgres"},
 			}},
@@ -76,6 +84,84 @@ func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *mi
 		np.Spec.Ingress = []networkingv1.NetworkPolicyIngressRule{{From: from}}
 		return nil
 	})
+}
+
+// reconcileEgressIsolation: opt-in。app/worker=DNS+intra+public(private/metadata除く)、
+// その他backend=DNS+intraのみ。postgresは除外(CNPGのbackup/replicationのため)
+func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+	frontend := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-egress-frontend", Namespace: m.Namespace}}
+	backend := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-egress-backend", Namespace: m.Namespace}}
+	if !boolOr(m.Spec.EgressIsolation.Enabled, false) {
+		if err := r.deleteIfExists(ctx, frontend); err != nil {
+			return err
+		}
+		return r.deleteIfExists(ctx, backend)
+	}
+	common := egressCommonRules(m)
+
+	// frontend: app/worker。連合のためpublic egressを許す
+	if err := r.apply(ctx, m, frontend, func() error {
+		frontend.Labels = labelsFor(m, "egress")
+		frontend.Spec.PodSelector = metav1.LabelSelector{
+			MatchLabels: map[string]string{instanceLabel: m.Name},
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      componentLabel,
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   []string{roleApp, roleWorker},
+			}},
+		}
+		frontend.Spec.PolicyTypes = []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}
+		frontend.Spec.Egress = append(common, publicEgressRule())
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// backend: app/worker/postgres以外。外向き不要
+	return r.apply(ctx, m, backend, func() error {
+		backend.Labels = labelsFor(m, "egress")
+		backend.Spec.PodSelector = metav1.LabelSelector{
+			MatchLabels: map[string]string{instanceLabel: m.Name},
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      componentLabel,
+				Operator: metav1.LabelSelectorOpNotIn,
+				Values:   []string{roleApp, roleWorker, "postgres"},
+			}},
+		}
+		backend.Spec.PolicyTypes = []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}
+		backend.Spec.Egress = common
+		return nil
+	})
+}
+
+// egressCommonRules: DNS(:53) + intra-instance + 明示allowNamespace。全componentで共通
+func egressCommonRules(m *misskeyv1alpha1.Misskey) []networkingv1.NetworkPolicyEgressRule {
+	udp, tcp := corev1.ProtocolUDP, corev1.ProtocolTCP
+	dnsPort := intstr.FromInt32(53)
+	dnsNs := stringOr(m.Spec.EgressIsolation.DNSNamespace, "kube-system")
+	rules := []networkingv1.NetworkPolicyEgressRule{
+		{
+			To:    []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: dnsNs}}}},
+			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dnsPort}, {Protocol: &tcp, Port: &dnsPort}},
+		},
+		{To: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{instanceLabel: m.Name}}}}},
+	}
+	for _, ns := range m.Spec.EgressIsolation.AllowedNamespaces {
+		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: ns}}}},
+		})
+	}
+	return rules
+}
+
+// publicEgressRule: private/link-local(metadata)を除くpublicへのegress
+func publicEgressRule() networkingv1.NetworkPolicyEgressRule {
+	return networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{
+			CIDR:   "0.0.0.0/0",
+			Except: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"},
+		}}},
+	}
 }
 
 // reconcileResourceQuota: dedicated時のみnamespace-wideなResourceQuotaを生成
