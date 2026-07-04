@@ -959,8 +959,8 @@ func TestBuildScaledObjectSentinelAndOverride(t *testing.T) {
 		t.Errorf("HA jobQueue must use redis-sentinel trigger: %v", trig["type"])
 	}
 	meta := trig["metadata"].(map[string]any)
-	if meta["addresses"] != "example-redis-jobqueue-sentinel.ns.svc:26379" || meta["sentinelMaster"] != "mymaster" {
-		t.Errorf("sentinel meta wrong (FQDN): %+v", meta)
+	if meta["hosts"] != "example-redis-jobqueue-sentinel.ns.svc" || meta["ports"] != "26379" || meta["sentinelMaster"] != "mymaster" {
+		t.Errorf("sentinel meta wrong (hosts/ports): %+v", meta)
 	}
 	if meta["listName"] != "custom:deliver:wait" {
 		t.Errorf("listName override ignored: %v", meta["listName"])

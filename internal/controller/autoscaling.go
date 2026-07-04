@@ -160,8 +160,10 @@ func buildScaledObject(m *misskeyv1alpha1.Misskey, component, targetName string,
 		typ := "redis"
 		if sentinel {
 			typ = "redis-sentinel"
-			// KEDAはkeda namespaceからcross-nsで解決するためFQDN必須
-			meta["addresses"] = sentinelAddresses(ep, m.Namespace)
+			// keda namespaceからcross-ns解決するためFQDN必須
+			hosts, ports := sentinelHostsPorts(ep, m.Namespace)
+			meta["hosts"] = hosts
+			meta["ports"] = ports
 			meta["sentinelMaster"] = ep.masterName
 		} else {
 			meta["address"] = fmt.Sprintf("%s.%s.svc:%d", ep.host, m.Namespace, ep.port)
@@ -201,13 +203,15 @@ func buildScaledObject(m *misskeyv1alpha1.Misskey, component, targetName string,
 	return u
 }
 
-// sentinelAddresses: cross-ns解決用にFQDN化した "host1.ns.svc:26379,..." 形式
-func sentinelAddresses(ep redisEndpoint, namespace string) string {
-	parts := make([]string, 0, len(ep.sentinels))
+// sentinelHostsPorts: cross-ns解決用にFQDN化したhosts/portsの並行CSV(KEDA redis-sentinel用)
+func sentinelHostsPorts(ep redisEndpoint, namespace string) (string, string) {
+	hosts := make([]string, 0, len(ep.sentinels))
+	ports := make([]string, 0, len(ep.sentinels))
 	for _, s := range ep.sentinels {
-		parts = append(parts, fmt.Sprintf("%s.%s.svc:%d", s.host, namespace, s.port))
+		hosts = append(hosts, fmt.Sprintf("%s.%s.svc", s.host, namespace))
+		ports = append(ports, strconv.Itoa(int(s.port)))
 	}
-	return strings.Join(parts, ",")
+	return strings.Join(hosts, ","), strings.Join(ports, ",")
 }
 
 // buildTriggerAuth: external redisパスワードをKEDAへ渡すTriggerAuthentication
