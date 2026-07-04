@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
@@ -67,6 +68,17 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var m misskeyv1alpha1.Misskey
 	if err := r.Get(ctx, req.NamespacedName, &m); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// 削除中はdeletionPolicyに従いデータ保持してfinalizerを外す
+	if !m.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &m)
+	}
+	// deletionPolicy処理のためfinalizerを付与
+	if controllerutil.AddFinalizer(&m, misskeyFinalizer) {
+		if err := r.Update(ctx, &m); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	reconcileErr := r.reconcileAll(ctx, &m)

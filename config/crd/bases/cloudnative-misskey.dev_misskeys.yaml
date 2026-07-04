@@ -233,6 +233,18 @@ spec:
                       type: object
                     type: array
                 type: object
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls what happens to data-bearing resources (the CNPG
+                  cluster, Redis/MeiliSearch StatefulSets and generated key Secrets) when this
+                  Misskey is deleted. Delete (default) garbage-collects everything via owner
+                  references. Retain orphans them so the data survives; recreating the Misskey
+                  with the same name re-adopts them.
+                enum:
+                - Delete
+                - Retain
+                type: string
               egressIsolation:
                 description: EgressIsolation configures egress isolation (opt-in).
                   See EgressIsolationSpec.

@@ -43,6 +43,16 @@ type MisskeySpec struct {
 	// +optional
 	IDGenerationMethod string `json:"idGenerationMethod,omitempty"`
 
+	// DeletionPolicy controls what happens to data-bearing resources (the CNPG
+	// cluster, Redis/MeiliSearch StatefulSets and generated key Secrets) when this
+	// Misskey is deleted. Delete (default) garbage-collects everything via owner
+	// references. Retain orphans them so the data survives; recreating the Misskey
+	// with the same name re-adopts them.
+	// +kubebuilder:validation:Enum=Delete;Retain
+	// +kubebuilder:default=Delete
+	// +optional
+	DeletionPolicy string `json:"deletionPolicy,omitempty"`
+
 	// Tenant is the tenant identifier stamped as the cloudnative-misskey.dev/tenant
 	// label on every managed resource and pod (incl. CNPG pods), for per-tenant log
 	// and metric routing. Immutable; defaults to the namespace when omitted. Setting
