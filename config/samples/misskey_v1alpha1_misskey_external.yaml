@@ -32,6 +32,7 @@ spec:
   redis:
     external:
       host: redis.cache.svc
+      # db: 0  # Redis logical database index (default 0)
 
   search:
     provider: meilisearch

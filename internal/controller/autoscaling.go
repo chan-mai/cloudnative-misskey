@@ -154,7 +154,7 @@ func buildScaledObject(m *misskeyv1alpha1.Misskey, component, targetName string,
 		meta := map[string]any{
 			"listName":      listName,
 			"listLength":    strconv.Itoa(int(q.ListLength)),
-			"databaseIndex": "0",
+			"databaseIndex": strconv.Itoa(int(ep.db)),
 			"enableTLS":     "false",
 		}
 		typ := "redis"

@@ -38,6 +38,10 @@ func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
 	w("%s:\n", key)
 	w("  host: %s\n", ep.host)
 	w("  port: %d\n", ep.port)
+	// 0はMisskey既定のため省略(managedのchecksumを変えない)
+	if ep.db != 0 {
+		w("  db: %d\n", ep.db)
+	}
 	if len(ep.sentinels) > 0 {
 		w("  sentinels:\n")
 		for _, s := range ep.sentinels {

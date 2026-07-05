@@ -44,6 +44,7 @@ type redisHostPort struct {
 type redisEndpoint struct {
 	host       string
 	port       int32
+	db         int32 // 論理DB index。managedは常に0
 	sentinels  []redisHostPort
 	masterName string
 	passSel    *corev1.SecretKeySelector // 認証secret。nilなら認証なし
@@ -208,6 +209,7 @@ func externalRedisEndpoint(ext *misskeyv1alpha1.ExternalRedis, passEnv string) r
 	ep := redisEndpoint{
 		host:    ext.Host,
 		port:    int32OrDefault(ext.Port, redisPort),
+		db:      ext.DB,
 		passSel: ext.PasswordSecret,
 		passEnv: passEnv,
 	}

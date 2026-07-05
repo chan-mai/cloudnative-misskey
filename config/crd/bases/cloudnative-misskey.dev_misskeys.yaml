@@ -876,6 +876,12 @@ spec:
                     description: External points Misskey at an existing Redis. When
                       set, no Redis is managed.
                     properties:
+                      db:
+                        description: DB is the Redis logical database index. Default
+                          0.
+                        format: int32
+                        minimum: 0
+                        type: integer
                       host:
                         description: |-
                           Host of the external Redis. With Sentinels set this is ignored by the
@@ -1067,6 +1073,12 @@ spec:
                               External points this role at an existing Redis. Mutually exclusive with the
                               managed override fields.
                             properties:
+                              db:
+                                description: DB is the Redis logical database index.
+                                  Default 0.
+                                format: int32
+                                minimum: 0
+                                type: integer
                               host:
                                 description: |-
                                   Host of the external Redis. With Sentinels set this is ignored by the
@@ -1262,6 +1274,12 @@ spec:
                               External points this role at an existing Redis. Mutually exclusive with the
                               managed override fields.
                             properties:
+                              db:
+                                description: DB is the Redis logical database index.
+                                  Default 0.
+                                format: int32
+                                minimum: 0
+                                type: integer
                               host:
                                 description: |-
                                   Host of the external Redis. With Sentinels set this is ignored by the
@@ -1457,6 +1475,12 @@ spec:
                               External points this role at an existing Redis. Mutually exclusive with the
                               managed override fields.
                             properties:
+                              db:
+                                description: DB is the Redis logical database index.
+                                  Default 0.
+                                format: int32
+                                minimum: 0
+                                type: integer
                               host:
                                 description: |-
                                   Host of the external Redis. With Sentinels set this is ignored by the
@@ -1652,6 +1676,12 @@ spec:
                               External points this role at an existing Redis. Mutually exclusive with the
                               managed override fields.
                             properties:
+                              db:
+                                description: DB is the Redis logical database index.
+                                  Default 0.
+                                format: int32
+                                minimum: 0
+                                type: integer
                               host:
                                 description: |-
                                   Host of the external Redis. With Sentinels set this is ignored by the

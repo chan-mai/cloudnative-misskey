@@ -617,6 +617,11 @@ type ExternalRedis struct {
 	// +optional
 	Port int32 `json:"port,omitempty"`
 
+	// DB is the Redis logical database index. Default 0.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	DB int32 `json:"db,omitempty"`
+
 	// PasswordSecret optionally references the Redis password.
 	// +optional
 	PasswordSecret *corev1.SecretKeySelector `json:"passwordSecret,omitempty"`

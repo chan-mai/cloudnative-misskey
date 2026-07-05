@@ -972,7 +972,7 @@ func TestBuildScaledObjectSentinelAndOverride(t *testing.T) {
 func TestBuildScaledObjectExternalRedis(t *testing.T) {
 	// external redisはcluster外hostのためFQDN(.ns.svc)化しない
 	m := newMisskey()
-	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.prod.example.com", Port: 6380}
+	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.prod.example.com", Port: 6380, DB: 2}
 	a := &misskeyv1alpha1.AutoscalingSpec{
 		MaxReplicas: 10,
 		Queues:      []misskeyv1alpha1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000}},
@@ -982,6 +982,9 @@ func TestBuildScaledObjectExternalRedis(t *testing.T) {
 	meta := trig["metadata"].(map[string]any)
 	if meta["address"] != "redis.prod.example.com:6380" {
 		t.Errorf("external address must not be FQDN-ified: %v", meta["address"])
+	}
+	if meta["databaseIndex"] != "2" {
+		t.Errorf("external db index must reach the KEDA trigger: %v", meta["databaseIndex"])
 	}
 
 	// external sentinelも同様にhostそのまま
@@ -995,6 +998,19 @@ func TestBuildScaledObjectExternalRedis(t *testing.T) {
 	meta2 := trig2["metadata"].(map[string]any)
 	if meta2["hosts"] != "s1.prod.example.com,s2.prod.example.com" || meta2["ports"] != "26379,26380" {
 		t.Errorf("external sentinel hosts/ports must not be FQDN-ified: %+v", meta2)
+	}
+}
+
+func TestRenderExternalRedisDB(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.svc", DB: 3}
+	if out := renderDefaultYML(m, resolve(m)); !strings.Contains(out, "  db: 3\n") {
+		t.Errorf("external redis db index missing:\n%s", out)
+	}
+	// db=0(Misskey既定)は省略しmanagedのchecksumを変えない
+	m2 := newMisskey()
+	if strings.Contains(renderDefaultYML(m2, resolve(m2)), "  db: 0\n") {
+		t.Error("db: 0 must be omitted")
 	}
 }
 
