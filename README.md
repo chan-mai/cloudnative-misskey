@@ -64,6 +64,15 @@ helm install keda kedacore/keda -n keda --create-namespace
 ## インストール
 
 ```bash
+# リリース添付のinstall manifestを直接適用(CRD+RBAC+controller manager)
+kubectl apply -f https://github.com/chan-mai/cloud-native-misskey/releases/latest/download/install.yaml
+# webhook入り(cert-manager必須)
+kubectl apply -f https://github.com/chan-mai/cloud-native-misskey/releases/latest/download/install-webhook.yaml
+```
+
+ソースからの適用:
+
+```bash
 # CRD+RBAC+controller managerを一括適用
 make deploy IMG=ghcr.io/chan-mai/cloud-native-misskey:v0.1.0
 # CRDのみ入れる
