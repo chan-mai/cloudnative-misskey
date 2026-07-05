@@ -44,7 +44,13 @@ func ingressAnnotations(m *misskeyv1alpha1.Misskey, className string) map[string
 }
 
 // 公開ホストをproxy(プロキシ無効時はapp直)へルーティングするIngressを作成/更新
+// ingress無効化時は既存Ingressを掃除
 func (r *MisskeyReconciler) reconcileIngress(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+	if !boolOr(m.Spec.Ingress.Enabled, true) {
+		ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: m.Name, Namespace: m.Namespace}}
+		return r.deleteIfExists(ctx, ing)
+	}
+
 	// 有効時はproxy、そうでなければapp直を対象
 	backendName := nameProxy(m)
 	var backendPort int32 = 80

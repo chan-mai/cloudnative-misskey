@@ -22,8 +22,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
@@ -94,7 +96,15 @@ func buildCaddyPodSpec(m *misskeyv1alpha1.Misskey, caddyfileKey string, withMain
 }
 
 // proxyのService+Deploymentを作成/更新し、有効時はmaintenanceのService+Deploymentも扱う
+// proxy/maintenance無効化時は該当リソースを掃除(reconcileRedis等のopt-outパターンと同じ)
 func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+	if !boolOr(m.Spec.Proxy.Enabled, true) {
+		if err := r.deleteProxyResources(ctx, m); err != nil {
+			return err
+		}
+		return r.deleteMaintenanceResources(ctx, m)
+	}
+
 	// proxy Service(port 80 -> 8080)
 	psvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameProxy(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, psvc, func() error {
@@ -123,7 +133,7 @@ func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1alph
 	}
 
 	if !boolOr(m.Spec.Proxy.Maintenance.Enabled, true) {
-		return nil
+		return r.deleteMaintenanceResources(ctx, m)
 	}
 
 	// maintenance Service(port 8080 -> 8080)
@@ -147,4 +157,35 @@ func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1alph
 		setDeployment(mdep, m, "maintenance", int32Ptr(1), pod, checksumAnnotation(renderMaintenanceCaddyfile(), maintenanceHTMLContent(m)))
 		return nil
 	})
+}
+
+// deleteProxyResources: proxy無効化時のcleanup(Deployment/Service/PDB)
+// config CMのCaddyfileキーはreconcileConfigMapsが落とすため、Deploymentを残すとmount切れになる
+func (r *MisskeyReconciler) deleteProxyResources(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+	objs := []client.Object{
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameProxy(m), Namespace: m.Namespace}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameProxy(m), Namespace: m.Namespace}},
+		&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: nameProxy(m), Namespace: m.Namespace}},
+	}
+	for _, o := range objs {
+		if err := r.deleteIfExists(ctx, o); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteMaintenanceResources: maintenance無効化時のcleanup(Deployment/Service/HTML ConfigMap)
+func (r *MisskeyReconciler) deleteMaintenanceResources(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+	objs := []client.Object{
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameMaintenance(m), Namespace: m.Namespace}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameMaintenance(m), Namespace: m.Namespace}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: nameMaintenanceHTML(m), Namespace: m.Namespace}},
+	}
+	for _, o := range objs {
+		if err := r.deleteIfExists(ctx, o); err != nil {
+			return err
+		}
+	}
+	return nil
 }

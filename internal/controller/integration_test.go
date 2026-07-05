@@ -27,6 +27,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -195,6 +197,108 @@ func TestReconcileIntegration(t *testing.T) {
 	}
 	if err := cl.Get(ctx, req.NamespacedName, &misskeyv1alpha1.Misskey{}); !apierrors.IsNotFound(err) {
 		t.Errorf("削除後もMisskeyが残存: %v", err)
+	}
+}
+
+// TestOptOutCleanup: proxy/maintenance/ingressの無効化で生成済みリソースが掃除されること
+func TestOptOutCleanup(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "optout"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+
+	m := &misskeyv1alpha1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: "oo", Namespace: ns},
+		Spec: misskeyv1alpha1.MisskeySpec{
+			URL:    "https://oo.example.com/",
+			Image:  "misskey/misskey:x",
+			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
+			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+				Host: "pg", Database: "d", User: "u",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+			}},
+			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+		},
+	}
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create misskey: %v", err)
+	}
+
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "oo", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	update := func(mutate func(*misskeyv1alpha1.Misskey)) {
+		cur := &misskeyv1alpha1.Misskey{}
+		if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+			t.Fatal(err)
+		}
+		mutate(cur)
+		if err := cl.Update(ctx, cur); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+
+	// 既定(proxy/maintenance/ingress有効)の生成物
+	for name, obj := range map[string]client.Object{
+		"proxy Deployment": &appsv1.Deployment{},
+		"proxy Service":    &corev1.Service{},
+		"proxy PDB":        &policyv1.PodDisruptionBudget{},
+	} {
+		if !exists(ctx, cl, obj, nameProxy(m), ns) {
+			t.Errorf("%s未生成", name)
+		}
+	}
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameMaintenance(m), ns) {
+		t.Error("maintenance Deployment未生成")
+	}
+	if !exists(ctx, cl, &corev1.ConfigMap{}, nameMaintenanceHTML(m), ns) {
+		t.Error("maintenance HTML ConfigMap未生成")
+	}
+	if !exists(ctx, cl, &networkingv1.Ingress{}, m.Name, ns) {
+		t.Error("Ingress未生成")
+	}
+
+	// maintenanceのみ無効化 → maintenance側だけ掃除、proxyは残る
+	update(func(c *misskeyv1alpha1.Misskey) { c.Spec.Proxy.Maintenance.Enabled = boolPtr(false) })
+	reconcile()
+	if exists(ctx, cl, &appsv1.Deployment{}, nameMaintenance(m), ns) {
+		t.Error("maintenance無効化後もDeploymentが残存")
+	}
+	if exists(ctx, cl, &corev1.Service{}, nameMaintenance(m), ns) {
+		t.Error("maintenance無効化後もServiceが残存")
+	}
+	if exists(ctx, cl, &corev1.ConfigMap{}, nameMaintenanceHTML(m), ns) {
+		t.Error("maintenance無効化後もHTML ConfigMapが残存")
+	}
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameProxy(m), ns) {
+		t.Error("maintenance無効化でproxy Deploymentまで消えた")
+	}
+
+	// proxy+ingress無効化 → 全掃除
+	update(func(c *misskeyv1alpha1.Misskey) {
+		c.Spec.Proxy.Enabled = boolPtr(false)
+		c.Spec.Ingress.Enabled = boolPtr(false)
+	})
+	reconcile()
+	if exists(ctx, cl, &appsv1.Deployment{}, nameProxy(m), ns) {
+		t.Error("proxy無効化後もDeploymentが残存")
+	}
+	if exists(ctx, cl, &corev1.Service{}, nameProxy(m), ns) {
+		t.Error("proxy無効化後もServiceが残存")
+	}
+	if exists(ctx, cl, &policyv1.PodDisruptionBudget{}, nameProxy(m), ns) {
+		t.Error("proxy無効化後もPDBが残存")
+	}
+	if exists(ctx, cl, &networkingv1.Ingress{}, m.Name, ns) {
+		t.Error("ingress無効化後もIngressが残存")
 	}
 }
 

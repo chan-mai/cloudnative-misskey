@@ -224,15 +224,12 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 			}
 		}
 	}
-	if boolOr(m.Spec.Proxy.Enabled, true) {
-		if err := r.reconcileProxy(ctx, m); err != nil {
-			return err
-		}
+	// 常に呼ぶ(有効時provisioning + 無効化時cleanup)
+	if err := r.reconcileProxy(ctx, m); err != nil {
+		return err
 	}
-	if boolOr(m.Spec.Ingress.Enabled, true) {
-		if err := r.reconcileIngress(ctx, m, p); err != nil {
-			return err
-		}
+	if err := r.reconcileIngress(ctx, m, p); err != nil {
+		return err
 	}
 	if err := r.reconcileMonitoring(ctx, m, p); err != nil {
 		return err
