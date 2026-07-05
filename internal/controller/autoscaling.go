@@ -160,13 +160,12 @@ func buildScaledObject(m *misskeyv1alpha1.Misskey, component, targetName string,
 		typ := "redis"
 		if sentinel {
 			typ = "redis-sentinel"
-			// keda namespaceからcross-ns解決するためFQDN必須
 			hosts, ports := sentinelHostsPorts(ep, m.Namespace)
 			meta["hosts"] = hosts
 			meta["ports"] = ports
 			meta["sentinelMaster"] = ep.masterName
 		} else {
-			meta["address"] = fmt.Sprintf("%s.%s.svc:%d", ep.host, m.Namespace, ep.port)
+			meta["address"] = redisTriggerAddress(ep, m.Namespace)
 		}
 		trig := map[string]any{"type": typ, "metadata": meta}
 		if ep.passSel != nil {
@@ -203,12 +202,26 @@ func buildScaledObject(m *misskeyv1alpha1.Misskey, component, targetName string,
 	return u
 }
 
-// sentinelHostsPorts: cross-ns解決用にFQDN化したhosts/portsの並行CSV(KEDA redis-sentinel用)
+// redisTriggerAddress: KEDA redis triggerのaddress
+// managedはService名のためkeda namespaceからのcross-ns解決にFQDN化。externalはhostをそのまま使う
+func redisTriggerAddress(ep redisEndpoint, namespace string) string {
+	if ep.managed {
+		return fmt.Sprintf("%s.%s.svc:%d", ep.host, namespace, ep.port)
+	}
+	return fmt.Sprintf("%s:%d", ep.host, ep.port)
+}
+
+// sentinelHostsPorts: hosts/portsの並行CSV(KEDA redis-sentinel用)
+// managedのsentinelはService名のためFQDN化。externalはhostをそのまま使う
 func sentinelHostsPorts(ep redisEndpoint, namespace string) (string, string) {
 	hosts := make([]string, 0, len(ep.sentinels))
 	ports := make([]string, 0, len(ep.sentinels))
 	for _, s := range ep.sentinels {
-		hosts = append(hosts, fmt.Sprintf("%s.%s.svc", s.host, namespace))
+		host := s.host
+		if ep.managed {
+			host = fmt.Sprintf("%s.%s.svc", s.host, namespace)
+		}
+		hosts = append(hosts, host)
 		ports = append(ports, strconv.Itoa(int(s.port)))
 	}
 	return strings.Join(hosts, ","), strings.Join(ports, ",")

@@ -965,6 +965,35 @@ func TestBuildScaledObjectSentinelAndOverride(t *testing.T) {
 	}
 }
 
+func TestBuildScaledObjectExternalRedis(t *testing.T) {
+	// external redisはcluster外hostのためFQDN(.ns.svc)化しない
+	m := newMisskey()
+	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.prod.example.com", Port: 6380}
+	a := &misskeyv1alpha1.AutoscalingSpec{
+		MaxReplicas: 10,
+		Queues:      []misskeyv1alpha1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000}},
+	}
+	so := buildScaledObject(m, roleWorker, "example-worker", a, jobQueueEndpoint(resolve(m)))
+	trig := scaledObjectTriggers(so.Object["spec"].(map[string]any))[0].(map[string]any)
+	meta := trig["metadata"].(map[string]any)
+	if meta["address"] != "redis.prod.example.com:6380" {
+		t.Errorf("external address must not be FQDN-ified: %v", meta["address"])
+	}
+
+	// external sentinelも同様にhostそのまま
+	m2 := newMisskey()
+	m2.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{
+		Host: "redis.prod.example.com", MasterName: "mymaster",
+		Sentinels: []misskeyv1alpha1.RedisHostPort{{Host: "s1.prod.example.com"}, {Host: "s2.prod.example.com", Port: 26380}},
+	}
+	so2 := buildScaledObject(m2, roleWorker, "example-worker", a, jobQueueEndpoint(resolve(m2)))
+	trig2 := scaledObjectTriggers(so2.Object["spec"].(map[string]any))[0].(map[string]any)
+	meta2 := trig2["metadata"].(map[string]any)
+	if meta2["hosts"] != "s1.prod.example.com,s2.prod.example.com" || meta2["ports"] != "26379,26380" {
+		t.Errorf("external sentinel hosts/ports must not be FQDN-ified: %+v", meta2)
+	}
+}
+
 func TestMonitoringBuilders(t *testing.T) {
 	m := newMisskey()
 	m.Spec.Monitoring.Labels = map[string]string{"release": "kps"}
