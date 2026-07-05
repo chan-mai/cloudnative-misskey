@@ -243,28 +243,6 @@ spec:
                 - Delete
                 - Retain
                 type: string
-              egressIsolation:
-                description: EgressIsolation configures egress isolation (opt-in).
-                  See EgressIsolationSpec.
-                properties:
-                  allowedNamespaces:
-                    description: |-
-                      AllowedNamespaces are additional egress-permitted namespace names on any
-                      port, e.g. an in-cluster SMTP relay or object store.
-                    items:
-                      type: string
-                    type: array
-                  dnsNamespace:
-                    default: kube-system
-                    description: |-
-                      DNSNamespace runs the cluster DNS (CoreDNS), allowed on :53. Defaults to
-                      kube-system.
-                    type: string
-                  enabled:
-                    description: Enabled creates the egress NetworkPolicies. Default
-                      false (opt-in).
-                    type: boolean
-                type: object
               extraConfig:
                 description: |-
                   ExtraConfig is raw YAML appended verbatim to the generated default.yml.
@@ -378,25 +356,53 @@ spec:
                       image for standalone Redis.
                     type: string
                 type: object
-              networkIsolation:
+              network:
                 description: |-
-                  NetworkIsolation configures ingress isolation for this instance's backend
-                  pods (app/worker/redis/meilisearch).
+                  Network groups this instance's NetworkPolicy controls (ingress isolation and
+                  opt-in egress isolation).
                 properties:
-                  allowedNamespaces:
+                  egressIsolation:
+                    description: EgressIsolation configures egress isolation (opt-in).
+                      See EgressIsolationSpec.
+                    properties:
+                      allowedNamespaces:
+                        description: |-
+                          AllowedNamespaces are additional egress-permitted namespace names on any
+                          port, e.g. an in-cluster SMTP relay or object store.
+                        items:
+                          type: string
+                        type: array
+                      dnsNamespace:
+                        default: kube-system
+                        description: |-
+                          DNSNamespace runs the cluster DNS (CoreDNS), allowed on :53. Defaults to
+                          kube-system.
+                        type: string
+                      enabled:
+                        description: Enabled creates the egress NetworkPolicies. Default
+                          false (opt-in).
+                        type: boolean
+                    type: object
+                  isolation:
                     description: |-
-                      AllowedNamespaces are namespace names (matched by the
-                      kubernetes.io/metadata.name label) permitted to reach the isolated backend
-                      pods in addition to intra-instance traffic, e.g. a monitoring namespace for
-                      Prometheus scraping.
-                    items:
-                      type: string
-                    type: array
-                  enabled:
-                    default: true
-                    description: Enabled creates the isolation NetworkPolicy. Default
-                      true.
-                    type: boolean
+                      Isolation configures the ingress NetworkPolicy for this instance's backend
+                      pods (app/worker/redis/meilisearch).
+                    properties:
+                      allowedNamespaces:
+                        description: |-
+                          AllowedNamespaces are namespace names (matched by the
+                          kubernetes.io/metadata.name label) permitted to reach the isolated backend
+                          pods in addition to intra-instance traffic, e.g. a monitoring namespace for
+                          Prometheus scraping.
+                        items:
+                          type: string
+                        type: array
+                      enabled:
+                        default: true
+                        description: Enabled creates the isolation NetworkPolicy.
+                          Default true.
+                        type: boolean
+                    type: object
                 type: object
               postgres:
                 description: Postgres configures the PostgreSQL backend (CNPG-managed
@@ -913,6 +919,10 @@ spec:
                     required:
                     - host
                     type: object
+                    x-kubernetes-validations:
+                    - message: masterName is required when sentinels is set
+                      rule: '!has(self.sentinels) || size(self.sentinels) == 0 ||
+                        has(self.masterName)'
                   ha:
                     description: |-
                       HA enables operator-managed Sentinel HA (CloudNativePG-style, via the
@@ -1098,6 +1108,10 @@ spec:
                             required:
                             - host
                             type: object
+                            x-kubernetes-validations:
+                            - message: masterName is required when sentinels is set
+                              rule: '!has(self.sentinels) || size(self.sentinels)
+                                == 0 || has(self.masterName)'
                           ha:
                             description: |-
                               HA turns this role's managed instance into a Sentinel HA setup. Presence
@@ -1288,6 +1302,10 @@ spec:
                             required:
                             - host
                             type: object
+                            x-kubernetes-validations:
+                            - message: masterName is required when sentinels is set
+                              rule: '!has(self.sentinels) || size(self.sentinels)
+                                == 0 || has(self.masterName)'
                           ha:
                             description: |-
                               HA turns this role's managed instance into a Sentinel HA setup. Presence
@@ -1478,6 +1496,10 @@ spec:
                             required:
                             - host
                             type: object
+                            x-kubernetes-validations:
+                            - message: masterName is required when sentinels is set
+                              rule: '!has(self.sentinels) || size(self.sentinels)
+                                == 0 || has(self.masterName)'
                           ha:
                             description: |-
                               HA turns this role's managed instance into a Sentinel HA setup. Presence
@@ -1668,6 +1690,10 @@ spec:
                             required:
                             - host
                             type: object
+                            x-kubernetes-validations:
+                            - message: masterName is required when sentinels is set
+                              rule: '!has(self.sentinels) || size(self.sentinels)
+                                == 0 || has(self.masterName)'
                           ha:
                             description: |-
                               HA turns this role's managed instance into a Sentinel HA setup. Presence
@@ -1897,7 +1923,7 @@ spec:
                         - host
                         type: object
                       image:
-                        default: getmeili/meilisearch:v1.11
+                        default: getmeili/meilisearch:v1
                         description: Image for the managed MeiliSearch StatefulSet.
                         type: string
                       index:

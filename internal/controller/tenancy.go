@@ -56,7 +56,7 @@ func (r *MisskeyReconciler) reconcileTenancy(ctx context.Context, m *misskeyv1al
 // postgresはCNPG operatorのcross-namespaceアクセス(instance manager :8000)が要るため除外
 func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-isolation", Namespace: m.Namespace}}
-	if !boolOr(m.Spec.NetworkIsolation.Enabled, true) {
+	if !boolOr(m.Spec.Network.Isolation.Enabled, true) {
 		return r.deleteIfExists(ctx, np)
 	}
 	publicEntry := "proxy"
@@ -67,7 +67,7 @@ func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *mi
 	from := []networkingv1.NetworkPolicyPeer{
 		{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{instanceLabel: m.Name}}},
 	}
-	for _, ns := range m.Spec.NetworkIsolation.AllowedNamespaces {
+	for _, ns := range m.Spec.Network.Isolation.AllowedNamespaces {
 		from = append(from, networkingv1.NetworkPolicyPeer{
 			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: ns}},
 		})
@@ -93,7 +93,7 @@ func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *mi
 func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
 	frontend := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-egress-frontend", Namespace: m.Namespace}}
 	backend := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-egress-backend", Namespace: m.Namespace}}
-	if !boolOr(m.Spec.EgressIsolation.Enabled, false) {
+	if !boolOr(m.Spec.Network.EgressIsolation.Enabled, false) {
 		if err := r.deleteIfExists(ctx, frontend); err != nil {
 			return err
 		}
@@ -147,7 +147,7 @@ func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *mis
 func egressCommonRules(m *misskeyv1alpha1.Misskey) []networkingv1.NetworkPolicyEgressRule {
 	udp, tcp := corev1.ProtocolUDP, corev1.ProtocolTCP
 	dnsPort := intstr.FromInt32(53)
-	dnsNs := stringOr(m.Spec.EgressIsolation.DNSNamespace, "kube-system")
+	dnsNs := stringOr(m.Spec.Network.EgressIsolation.DNSNamespace, "kube-system")
 	rules := []networkingv1.NetworkPolicyEgressRule{
 		{
 			To:    []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: dnsNs}}}},
@@ -155,7 +155,7 @@ func egressCommonRules(m *misskeyv1alpha1.Misskey) []networkingv1.NetworkPolicyE
 		},
 		{To: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{instanceLabel: m.Name}}}}},
 	}
-	for _, ns := range m.Spec.EgressIsolation.AllowedNamespaces {
+	for _, ns := range m.Spec.Network.EgressIsolation.AllowedNamespaces {
 		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
 			To: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: ns}}}},
 		})

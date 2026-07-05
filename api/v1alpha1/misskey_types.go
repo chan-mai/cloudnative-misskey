@@ -121,14 +121,10 @@ type MisskeySpec struct {
 	// +optional
 	ExtraConfig string `json:"extraConfig,omitempty"`
 
-	// NetworkIsolation configures ingress isolation for this instance's backend
-	// pods (app/worker/redis/meilisearch).
+	// Network groups this instance's NetworkPolicy controls (ingress isolation and
+	// opt-in egress isolation).
 	// +optional
-	NetworkIsolation NetworkIsolationSpec `json:"networkIsolation,omitempty"`
-
-	// EgressIsolation configures egress isolation (opt-in). See EgressIsolationSpec.
-	// +optional
-	EgressIsolation EgressIsolationSpec `json:"egressIsolation,omitempty"`
+	Network NetworkSpec `json:"network,omitempty"`
 
 	// Tenancy configures namespace-scoped isolation, assuming the namespace is
 	// dedicated to this instance.
@@ -177,6 +173,19 @@ type MigrationSpec struct {
 	// index needing manual cleanup.
 	// +optional
 	CreateIndexConcurrently *bool `json:"createIndexConcurrently,omitempty"`
+}
+
+// NetworkSpec groups the instance's NetworkPolicy controls: ingress isolation
+// (Isolation) and opt-in egress isolation (EgressIsolation).
+type NetworkSpec struct {
+	// Isolation configures the ingress NetworkPolicy for this instance's backend
+	// pods (app/worker/redis/meilisearch).
+	// +optional
+	Isolation NetworkIsolationSpec `json:"isolation,omitempty"`
+
+	// EgressIsolation configures egress isolation (opt-in). See EgressIsolationSpec.
+	// +optional
+	EgressIsolation EgressIsolationSpec `json:"egressIsolation,omitempty"`
 }
 
 // NetworkIsolationSpec configures the per-instance ingress NetworkPolicy. It
@@ -593,6 +602,7 @@ type RedisRole struct {
 }
 
 // ExternalRedis references a Redis running outside the operator's control.
+// +kubebuilder:validation:XValidation:rule="!has(self.sentinels) || size(self.sentinels) == 0 || has(self.masterName)",message="masterName is required when sentinels is set"
 type ExternalRedis struct {
 	// Host of the external Redis. With Sentinels set this is ignored by the
 	// client but still required by Misskey's config schema.
@@ -659,7 +669,7 @@ type MeilisearchSpec struct {
 	External *ExternalMeilisearch `json:"external,omitempty"`
 
 	// Image for the managed MeiliSearch StatefulSet.
-	// +kubebuilder:default="getmeili/meilisearch:v1.11"
+	// +kubebuilder:default="getmeili/meilisearch:v1"
 	// +optional
 	Image string `json:"image,omitempty"`
 

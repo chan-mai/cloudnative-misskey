@@ -254,6 +254,11 @@ func TestCELValidation(t *testing.T) {
 				External: &misskeyv1alpha1.ExternalRedis{Host: "r"}, HA: &misskeyv1alpha1.RedisHA{},
 			}}
 		}},
+		{"external redis sentinels without masterName", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{
+				Host: "r", Sentinels: []misskeyv1alpha1.RedisHostPort{{Host: "s1"}},
+			}
+		}},
 	}
 	for i, tc := range cross {
 		m := valid(fmt.Sprintf("cross-%d", i))

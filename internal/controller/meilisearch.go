@@ -78,7 +78,7 @@ func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskey
 		return err
 	}
 
-	image := stringOr(m.Spec.Search.Meilisearch.Image, "getmeili/meilisearch:v1.11")
+	image := stringOr(m.Spec.Search.Meilisearch.Image, "getmeili/meilisearch:v1")
 	storage := quantityOr(m.Spec.Search.Meilisearch.Storage, "10Gi")
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: nameMeili(m), Namespace: m.Namespace}}

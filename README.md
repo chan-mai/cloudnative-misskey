@@ -59,7 +59,7 @@ helm install keda kedacore/keda -n keda --create-namespace
 ```
 
 > [!IMPORTANT]
-> network isolation併用時、`networkIsolation.enabled=true`(既定)のままredis HAやworker queueスケールを使う場合、redis-operator/KEDAがredisへ到達できるよう、それらのnamespaceを`spec.networkIsolation.allowedNamespaces`に必ず含めてください。未設定だとoperator/KEDAがredisに届かずHA/スケールが立ち上がりません。managed HA redisはrequirepass認証も付くため、network到達可否に関わらずデータ自体は保護されます。
+> network isolation併用時、`network.isolation.enabled=true`(既定)のままredis HAやworker queueスケールを使う場合、redis-operator/KEDAがredisへ到達できるよう、それらのnamespaceを`spec.network.isolation.allowedNamespaces`に必ず含めてください。未設定だとoperator/KEDAがredisに届かずHA/スケールが立ち上がりません。managed HA redisはrequirepass認証も付くため、network到達可否に関わらずデータ自体は保護されます。
 
 ## インストール
 
@@ -140,10 +140,10 @@ spec:
 | `migration.createIndexConcurrently` | `false` | `true`で`MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY=1`。note等の巨大表index作成の書込ロックを避ける(opt-in) |
 | `proxy.enabled` | `true` | Caddy proxyの有無 |
 | `ingress.className` | `nginx` | ingressClassName |
-| `networkIsolation.enabled` | `true` | backend(app/worker/redis/meili)へのingressをintra-instanceに限る。公開入口(proxy)とpostgres(CNPGに委任)は対象外 |
-| `networkIsolation.allowedNamespaces` | (なし) | backendへの到達を追加で許すnamespace名。監視namespaceからのscrape等 |
-| `egressIsolation.enabled` | `false` | egress隔離(opt-in)。app/workerはpublic可、他backendはintra+DNSのみ。postgresは除外 |
-| `egressIsolation.dnsNamespace` | `kube-system` | egress隔離時に`:53`を許すDNS namespace |
+| `network.isolation.enabled` | `true` | backend(app/worker/redis/meili)へのingressをintra-instanceに限る。公開入口(proxy)とpostgres(CNPGに委任)は対象外 |
+| `network.isolation.allowedNamespaces` | (なし) | backendへの到達を追加で許すnamespace名。監視namespaceからのscrape等 |
+| `network.egressIsolation.enabled` | `false` | egress隔離(opt-in)。app/workerはpublic可、他backendはintra+DNSのみ。postgresは除外 |
+| `network.egressIsolation.dnsNamespace` | `kube-system` | egress隔離時に`:53`を許すDNS namespace |
 | `tenancy.dedicated` | `false` | namespace占有宣言。`quota`(ResourceQuota)/`limitRange`(LimitRange)生成の前提 |
 | `monitoring.enabled` | `false` | PostgreSQL/Redis/MeiliSearchのServiceMonitor/PodMonitorを生成(opt-in, Prometheus Operator必須)。Redisはexporter、Meiliは`/metrics`を自動有効化。`monitoring.labels`でPrometheus selector合わせ |
 | `extraConfig` | (なし) | `default.yml`末尾に追記する生YAML |
@@ -205,12 +205,13 @@ spec:
     ha:
       replicas: 3    # redisノード数(1 primary + 2 replica)
       sentinels: 3   # sentinel数(quorum用に奇数)
-  networkIsolation:
-    allowedNamespaces: [redis-operator, keda]  # operator/KEDAのredis到達に必須
+  network:
+    isolation:
+      allowedNamespaces: [redis-operator, keda]  # operator/KEDAのredis到達に必須
 ```
 
 - **認証**: operatorが`<name>-redis-auth` Secretにrandom passwordを生成し、Redis/Sentinel両方に`requirepass`を設定します。任意podからの無認証read/writeを防ぎます。
-- **隔離**: HA redis/sentinel podはoperator管理でinstance labelを持たず、通常の`networkIsolation`のNPに乗りません。その穴を埋める専用NP(`<name>-redis-ha`、app/worker+intra-HA+`allowedNamespaces`のみ許可)を`networkIsolation.enabled`と連動して生成します。standalone redisは通常どおり`networkIsolation`で保護します。
+- **隔離**: HA redis/sentinel podはoperator管理でinstance labelを持たず、通常の`network.isolation`のNPに乗りません。その穴を埋める専用NP(`<name>-redis-ha`、app/worker+intra-HA+`allowedNamespaces`のみ許可)を`network.isolation.enabled`と連動して生成します。standalone redisは通常どおり`network.isolation`で保護します。
 - **前提**: redis-operatorのインストールと、network isolation有効時は`allowedNamespaces`にredis-operator(+KEDA)のnamespaceを含めること(前提節参照)。
 
 ### 役割別分離 (`redis.roles`)
@@ -285,11 +286,13 @@ make fmt vet
 - appのオートスケールはCPU/memory(native HPA)のみです。RPSベース(Prometheus + KEDA prometheus trigger)は将来対応です。
 - immutable検証(`url`/`idGenerationMethod`/`tenant`)とcross-field整合(managed/external排他、pooler/backupのmanaged必須、autoscaling min<=max、redis role排他)はCRDのCEL(`x-kubernetes-validations`)で**常時**強制します。APIサーバが直接弾くため、webhook未導入でも効きます。
 - webhook(`config/default-webhook`、cert-manager必須、opt-in)はCELで表せない補助のみを担います: `tenant`未設定→namespace確定のdefaulting(「未設定→初回設定」の穴塞ぎ)と、エラーにしない警告(external DBで`readOffload`無効、等)。cert-manager無しなら`config/default`(webhook無し)を使い`ENABLE_WEBHOOKS=false`で無効化できます。この場合`tenant`は生成時に明示してください(defaultingが効かないため)。
-- egress隔離は`spec.egressIsolation.enabled`でopt-inです(既定off)。有効時、app/workerはDNS+intra-instance+public(private/link-local除く)、他backendはDNS+intra-instanceのみに制限し、SSRF/横移動を抑止します。app/workerは連合のため外向きpublicは開けるので、目的は外向き遮断ではなく内部到達の遮断です。DNS namespaceは`egressIsolation.dnsNamespace`(既定`kube-system`)で指定します。
-- PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`networkIsolation.allowedNamespaces`で明示的に開けてください。
+- egress隔離は`spec.network.egressIsolation.enabled`でopt-inです(既定off)。有効時、app/workerはDNS+intra-instance+public(private/link-local除く)、他backendはDNS+intra-instanceのみに制限し、SSRF/横移動を抑止します。app/workerは連合のため外向きpublicは開けるので、目的は外向き遮断ではなく内部到達の遮断です。DNS namespaceは`network.egressIsolation.dnsNamespace`(既定`kube-system`)で指定します。
+- PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`network.isolation.allowedNamespaces`で明示的に開けてください。
 - **オブジェクトストレージ(media)は本Operatorの責務外です。** これは、Misskeyのオブジェクトストレージ設定はコントロールパネルで行うものであり、`default.yml`から宣言的に投入できないためです。未設定時のアップロードファイルはpodローカル(emptyDir)に置かれ、**pod再起動で消え、複数レプリカ間でも共有されません**。よって`app.replicas>1`で運用する場合は、初期セットアップ後にオブジェクトストレージを設定してください。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
 - シークレットの値だけを更新(ローテーション)してもPodは再起動しません。ローリング判定のchecksumはプレースホルダ入りの`default.yml`本文基準で、値の変化を見ないためです。参照Secretの`resourceVersion`をchecksumに含める拡張は可能です。
 - メンテナンス応答は既定HTTP 200のため、外形監視は実ステータスを返す`/api/*`を対象にしてください。
 - Caddyの`trusted_proxies`は`private_ranges`固定です。前段が非private(cluster外のCloudflare等)なら実CIDRに合わせた調整が要ります。
 - initContainerが起動毎に`built/`(数百MB規模)をコピーするため、起動レイテンシに影響します。
+- backend image既定の固定方針: upstreamがrolling majorタグを出すものは**major float**でpatch/minorに追従します(`caddy:2`/`redis:8-alpine`/CNPG `postgresql:17`/`meilisearch:v1`)。opstree `redis`/`redis-sentinel`(`v8.2.5`)と`redis_exporter`(`v1.62.0`)はupstreamがrolling major/minorを出さないため**patch pin**です(opstreeはredis-operatorのtested版と揃える意味もあり)。既定は時間で古びるので、operatorリリース毎にpinを見直します。再現性重視で全て固定したい場合は各`image`/`imageName`で明示指定してください。
+- enumのcasingはbackendの実値に合わせています(統一より実値一致を優先): `deletionPolicy`(`Delete`/`Retain`)はk8s慣習のPascalCase、`search.provider`/`postgres.pooler.poolMode`/`search.meilisearch.scope`はMisskey/PgBouncerがそのまま受け取るlowercase値です。

@@ -182,12 +182,12 @@ func (r *MisskeyReconciler) reconcileRedis(ctx context.Context, m *misskeyv1alph
 
 // reconcileRedisHANetworkPolicy: operator管理HA redis/sentinel podへのingressを制限
 // app/worker + intra-HA + allowedNamespaces(redis-operator/keda)のみ許可
-// HA podはinstance labelを持たずnetworkIsolationのNPに乗らないため、その穴を埋める専用NP
-// networkIsolation.enabledでgate(networkIsolationの一部として機能)。requirepassと併せた多層防御
+// HA podはinstance labelを持たずnetwork.isolationのNPに乗らないため、その穴を埋める専用NP
+// network.isolation.enabledでgate(network.isolationの一部として機能)。requirepassと併せた多層防御
 func (r *MisskeyReconciler) reconcileRedisHANetworkPolicy(ctx context.Context, m *misskeyv1alpha1.Misskey, inst redisManagedInstance) error {
 	name := nameRedisInstance(m, inst.suffix) + "-ha"
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.Namespace}}
-	if !boolOr(m.Spec.NetworkIsolation.Enabled, true) {
+	if !boolOr(m.Spec.Network.Isolation.Enabled, true) {
 		return r.deleteIfExists(ctx, np)
 	}
 	rp := intstr.FromInt32(redisPort)
@@ -207,8 +207,8 @@ func (r *MisskeyReconciler) reconcileRedisHANetworkPolicy(ctx context.Context, m
 			// replication/sentinel相互(intra-HA)
 			{PodSelector: &appIn},
 		}
-		// redis-operator/KEDA等のcross-ns(管理・metric取得)。networkIsolation.allowedNamespacesを流用
-		for _, ns := range m.Spec.NetworkIsolation.AllowedNamespaces {
+		// redis-operator/KEDA等のcross-ns(管理・metric取得)。network.isolation.allowedNamespacesを流用
+		for _, ns := range m.Spec.Network.Isolation.AllowedNamespaces {
 			from = append(from, networkingv1.NetworkPolicyPeer{
 				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{nsNameLabel: ns}},
 			})
@@ -294,7 +294,7 @@ func (r *MisskeyReconciler) reconcileRedisStandalone(ctx context.Context, m *mis
 	}); err != nil {
 		return err
 	}
-	// standalone redisはinstance全体のnetworkIsolation(intra-instance)で保護する
+	// standalone redisはinstance全体のnetwork.isolation(intra-instance)で保護する
 	// 旧版が作っていた専用NP(<name>-redis)があれば掃除
 	oldNP := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: nameRedisInstance(m, inst.suffix), Namespace: m.Namespace}}
 	return r.deleteIfExists(ctx, oldNP)
