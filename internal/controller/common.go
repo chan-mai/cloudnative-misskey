@@ -18,12 +18,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package controller
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
@@ -40,6 +43,39 @@ func checksumAnnotation(parts ...string) map[string]string {
 		h.Write([]byte{0})
 	}
 	return map[string]string{configChecksumAnnotation: hex.EncodeToString(h.Sum(nil))}
+}
+
+// referencedSecretVersions: 描画済みconfigが参照する全Secretのname:resourceVersionを決定的順序で返す
+// checksumAnnotationに混ぜてSecret値のローテーションでpodをローリングさせる(不在はname:missing)
+// 参照集合はrenderInitEnvと同一。値でなくresourceVersion基準なのは、annotation経由の
+// 低エントロピーパスワードのオフライン総当りを避けるため
+func (r *MisskeyReconciler) referencedSecretVersions(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) []string {
+	names := map[string]bool{p.dbPassSel.Name: true}
+	if p.meiliEnabled {
+		names[p.meiliKeySel.Name] = true
+	}
+	if p.redisDefault.passSel != nil {
+		names[p.redisDefault.passSel.Name] = true
+	}
+	for _, rd := range redisRoleDescs {
+		if ep, ok := p.redisRoles[rd.key]; ok && ep.passSel != nil {
+			names[ep.passSel.Name] = true
+		}
+	}
+	if p.setupEnabled {
+		names[p.setupSel.Name] = true
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		version := "missing"
+		s := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: m.Namespace}, s); err == nil {
+			version = s.ResourceVersion
+		}
+		out = append(out, name+":"+version)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // インスタンス全体で使う既知のポート番号

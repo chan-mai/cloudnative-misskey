@@ -32,14 +32,17 @@ import (
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
 
-// migrationChecksum: migration Jobの入力checksum annotation(migrate config本文+concurrently flag)
+// migrationChecksum: migration Jobの入力checksum annotation
+// migrate config本文+concurrently flag+参照Secret版数。認証情報ローテで失敗Jobも作り直される
 // image変更はJob名(imageHash)で別Jobになるため含めない
-func migrationChecksum(m *misskeyv1alpha1.Misskey, p plan) map[string]string {
-	return checksumAnnotation(renderDefaultYML(m, migratePlan(m, p)), strconv.FormatBool(migrationConcurrentIndexes(m)))
+func (r *MisskeyReconciler) migrationChecksum(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) map[string]string {
+	parts := []string{renderDefaultYML(m, migratePlan(m, p)), strconv.FormatBool(migrationConcurrentIndexes(m))}
+	parts = append(parts, r.referencedSecretVersions(ctx, m, p)...)
+	return checksumAnnotation(parts...)
 }
 
 // buildMigrationJob: `pnpm run migrate`を1回だけ実行するJob。app/workerと同じinit/volumeを流用
-func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan) *batchv1.Job {
+func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan, annotations map[string]string) *batchv1.Job {
 	env := []corev1.EnvVar{{Name: "COREPACK_INTEGRITY_KEYS", Value: "0"}}
 	// index作成migrationを CREATE INDEX CONCURRENTLY にし、note等の巨大表への
 	// 書込ブロック(SHAREロック)を避ける。ormconfig.jsがmigrationsTransactionMode='each'へ切替
@@ -67,7 +70,7 @@ func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan) *batchv1.Job {
 			Name: nameMigrate(m), Namespace: m.Namespace,
 			Labels: labelsFor(m, "migrate"),
 			// 失敗時の再生成判定用(reconcileMigration参照)
-			Annotations: migrationChecksum(m, p),
+			Annotations: annotations,
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: int32Ptr(20), // DB起動待ちの猶予
@@ -87,10 +90,11 @@ func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1
 	if err := r.cleanupOldMigrationJobs(ctx, m); err != nil {
 		return false, err
 	}
+	checksum := r.migrationChecksum(ctx, m, p)
 	job := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: m.Namespace}, job)
 	if apierrors.IsNotFound(err) {
-		job = buildMigrationJob(m, p)
+		job = buildMigrationJob(m, p, checksum)
 		if err := controllerutil.SetControllerReference(m, job, r.Scheme); err != nil {
 			return false, err
 		}
@@ -107,7 +111,7 @@ func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1
 	// (次のreconcileでcreate-if-absentが再生成)。同一入力での失敗は保持し手動削除で再試行とする
 	// CREATE INDEX CONCURRENTLY失敗時のinvalid index堆積等を防ぐため無条件リトライはしない
 	if job.Status.Succeeded == 0 && job.Status.Failed >= 1 {
-		if job.Annotations[configChecksumAnnotation] != migrationChecksum(m, p)[configChecksumAnnotation] {
+		if job.Annotations[configChecksumAnnotation] != checksum[configChecksumAnnotation] {
 			policy := metav1.DeletePropagationBackground
 			if err := r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
 				return false, err

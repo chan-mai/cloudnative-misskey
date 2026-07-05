@@ -38,7 +38,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
@@ -348,10 +350,25 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1
 	return ready, client.IgnoreNotFound(err)
 }
 
+// misskeysInNamespace: Secret変更を同一namespaceの全Misskeyへ広播(参照Secretのローテ検知)
+// Owns(Secret)は所有分のみ発火するため、CNPG払い出しやユーザ持込Secretの更新はここで拾う
+func (r *MisskeyReconciler) misskeysInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list misskeyv1alpha1.MisskeyList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+	}
+	return reqs
+}
+
 // コントローラと所有リソースを結線
 func (r *MisskeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&misskeyv1alpha1.Misskey{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.misskeysInNamespace)).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).

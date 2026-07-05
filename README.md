@@ -307,7 +307,7 @@ make fmt vet
 - PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`network.isolation.allowedNamespaces`で明示的に開けてください。
 - **オブジェクトストレージ(media)は本Operatorの責務外です。** これは、Misskeyのオブジェクトストレージ設定はコントロールパネルで行うものであり、`default.yml`から宣言的に投入できないためです。未設定時のアップロードファイルはpodローカル(emptyDir)に置かれ、**pod再起動で消え、複数レプリカ間でも共有されません**。よって`app.replicas>1`で運用する場合は、初期セットアップ後にオブジェクトストレージを設定してください。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
-- シークレットの値だけを更新(ローテーション)してもPodは再起動しません。ローリング判定のchecksumはプレースホルダ入りの`default.yml`本文基準で、値の変化を見ないためです。参照Secretの`resourceVersion`をchecksumに含める拡張は可能です。
+- 参照Secret(DBパスワード/Meiliキー/Redisパスワード/setupPassword)のローテーションはpodテンプレートのchecksumに反映され、app/worker/失敗中のmigration Jobが自動で追従します。判定はSecretの`resourceVersion`基準のため、値が変わらないmetadata更新でもローリングが起きることがあります。
 - メンテナンス応答は既定HTTP 200のため、外形監視は実ステータスを返す`/api/*`を対象にしてください。
 - Caddyの`trusted_proxies`は`private_ranges`固定です。前段が非private(cluster外のCloudflare等)なら実CIDRに合わせた調整が要ります。
 - initContainerが起動毎に`built/`(数百MB規模)をコピーするため、起動レイテンシに影響します。

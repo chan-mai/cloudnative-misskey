@@ -95,7 +95,7 @@ func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1alpha1
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameApp(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
 		pod := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)
-		setDeployment(dep, m, roleApp, staticReplicas(m.Spec.App), pod, checksumAnnotation(renderDefaultYML(m, p)))
+		setDeployment(dep, m, roleApp, staticReplicas(m.Spec.App), pod, r.misskeyChecksum(ctx, m, p))
 		return nil
 	}); err != nil {
 		return err
@@ -111,7 +111,7 @@ func (r *MisskeyReconciler) reconcileWorker(ctx context.Context, m *misskeyv1alp
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameWorker(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
 		pod := buildMisskeyPodSpec(m, p, roleWorker, m.Spec.Worker)
-		setDeployment(dep, m, roleWorker, staticReplicas(m.Spec.Worker), pod, checksumAnnotation(renderDefaultYML(m, p)))
+		setDeployment(dep, m, roleWorker, staticReplicas(m.Spec.Worker), pod, r.misskeyChecksum(ctx, m, p))
 		return nil
 	}); err != nil {
 		return err
@@ -128,4 +128,11 @@ func staticReplicas(comp misskeyv1alpha1.ComponentSpec) *int32 {
 		return nil
 	}
 	return replicasOr(comp.Replicas, 1)
+}
+
+// misskeyChecksum: app/worker podテンプレートのchecksum annotation
+// config本文に加え参照SecretのresourceVersionを含め、値ローテーションでもローリングさせる
+func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) map[string]string {
+	parts := append([]string{renderDefaultYML(m, p)}, r.referencedSecretVersions(ctx, m, p)...)
+	return checksumAnnotation(parts...)
 }

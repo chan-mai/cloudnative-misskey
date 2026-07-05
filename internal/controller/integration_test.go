@@ -381,6 +381,87 @@ func TestMigrationRetryOnSpecChange(t *testing.T) {
 	}
 }
 
+// TestSecretRotationRollsPods: 参照Secretの値更新でapp podテンプレートのchecksumが変わること
+func TestSecretRotationRollsPods(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "rotate"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "pgsec", Namespace: ns},
+		StringData: map[string]string{"pw": "old"},
+	}
+	if err := cl.Create(ctx, sec); err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+
+	m := &misskeyv1alpha1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: "rot", Namespace: ns},
+		Spec: misskeyv1alpha1.MisskeySpec{
+			URL:    "https://rot.example.com/",
+			Image:  "misskey/misskey:x",
+			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
+			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+				Host: "pg", Database: "d", User: "u",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+			}},
+			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+		},
+	}
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create misskey: %v", err)
+	}
+
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rot", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+
+	// migrationを成功させapp Deploymentを生成
+	job := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, job); err != nil {
+		t.Fatal(err)
+	}
+	job.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, job); err != nil {
+		t.Fatalf("job status update: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	dep := &appsv1.Deployment{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameApp(m), Namespace: ns}, dep); err != nil {
+		t.Fatalf("app deployment: %v", err)
+	}
+	before := dep.Spec.Template.Annotations[configChecksumAnnotation]
+	if before == "" {
+		t.Fatal("checksum annotationが空")
+	}
+
+	// Secret値をローテーション → checksumが変わりpodがローリングする
+	if err := cl.Get(ctx, types.NamespacedName{Name: "pgsec", Namespace: ns}, sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data["pw"] = []byte("new")
+	if err := cl.Update(ctx, sec); err != nil {
+		t.Fatalf("secret update: %v", err)
+	}
+	reconcile()
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameApp(m), Namespace: ns}, dep); err != nil {
+		t.Fatal(err)
+	}
+	if dep.Spec.Template.Annotations[configChecksumAnnotation] == before {
+		t.Error("Secretローテーションでchecksumが変わらない")
+	}
+}
+
 // TestCELValidation: CRDのCEL(XValidation)がAPIサーバで常時強制されることを検証
 // webhook非依存でimmutable(url/id/tenant)とcross-field整合が効くこと
 func TestCELValidation(t *testing.T) {

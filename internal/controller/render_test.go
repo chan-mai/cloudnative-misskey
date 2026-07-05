@@ -812,13 +812,13 @@ func envHasName(env []corev1.EnvVar, name string) bool {
 func TestMigrationConcurrentDefaultOff(t *testing.T) {
 	// spec.migration未指定はopt-in既定off: CONCURRENTLYフラグを付けない
 	m := newMisskey()
-	job := buildMigrationJob(m, resolve(m))
+	job := buildMigrationJob(m, resolve(m), nil)
 	if envHasName(job.Spec.Template.Spec.Containers[0].Env, "MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY") {
 		t.Error("default (opt-in) must omit MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY")
 	}
 	// falseでも同様
 	m.Spec.Migration.CreateIndexConcurrently = boolPtr(false)
-	job = buildMigrationJob(m, resolve(m))
+	job = buildMigrationJob(m, resolve(m), nil)
 	if envHasName(job.Spec.Template.Spec.Containers[0].Env, "MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY") {
 		t.Error("createIndexConcurrently=false must omit the env")
 	}
@@ -827,7 +827,7 @@ func TestMigrationConcurrentDefaultOff(t *testing.T) {
 func TestMigrationConcurrentOptIn(t *testing.T) {
 	m := newMisskey()
 	m.Spec.Migration.CreateIndexConcurrently = boolPtr(true)
-	job := buildMigrationJob(m, resolve(m))
+	job := buildMigrationJob(m, resolve(m), nil)
 	if !envHasName(job.Spec.Template.Spec.Containers[0].Env, "MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY") {
 		t.Error("createIndexConcurrently=true must set the env on the migration Job")
 	}
