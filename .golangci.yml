@@ -1,0 +1,12 @@
+version: "2"
+
+# default: standard = errcheck / govet / ineffassign / staticcheck / unused
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt

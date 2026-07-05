@@ -65,7 +65,7 @@ func setDeployment(dep *appsv1.Deployment, m *misskeyv1alpha1.Misskey, component
 	}
 	dep.Spec.Strategy = rollingZeroDowntime()
 	dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorFor(m, component)}
-	dep.Spec.Template.ObjectMeta.Labels = labelsFor(m, component)
+	dep.Spec.Template.Labels = labelsFor(m, component)
 	if dep.Spec.Template.Annotations == nil {
 		dep.Spec.Template.Annotations = map[string]string{}
 	}

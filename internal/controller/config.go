@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -292,11 +293,12 @@ func (r *MisskeyReconciler) reconcileSetupSecret(ctx context.Context, m *misskey
 
 // このコントローラをfield managerとしてobjをserver-side apply
 // applyのread-modify-write全置換と違い、SSAは設定したフィールドのみマージし対象コントローラ所有のフィールドは保持(例: CNPGのwebhookがClusterに付与する既定値)。resync毎の差分を防ぐ
-func (r *MisskeyReconciler) applySSA(ctx context.Context, m *misskeyv1alpha1.Misskey, obj client.Object) error {
+func (r *MisskeyReconciler) applySSA(ctx context.Context, m *misskeyv1alpha1.Misskey, obj *unstructured.Unstructured) error {
 	if err := controllerutil.SetControllerReference(m, obj, r.Scheme); err != nil {
 		return err
 	}
-	return r.Patch(ctx, obj, client.Apply, client.FieldOwner("cloud-native-misskey"), client.ForceOwnership)
+	return r.Apply(ctx, client.ApplyConfigurationFromUnstructured(obj),
+		client.FieldOwner("cloud-native-misskey"), client.ForceOwnership)
 }
 
 // controller owner referenceも刻む薄いCreateOrUpdateラッパ。子はMisskeyオブジェクトと共にGCされる

@@ -87,7 +87,7 @@ func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskey
 		sts.Spec.ServiceName = nameMeili(m)
 		sts.Spec.Replicas = int32Ptr(1)
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorFor(m, "meilisearch")}
-		sts.Spec.Template.ObjectMeta.Labels = labelsFor(m, "meilisearch")
+		sts.Spec.Template.Labels = labelsFor(m, "meilisearch")
 		meiliEnv := []corev1.EnvVar{
 			secretEnv("MEILI_MASTER_KEY", p.meiliKeySel),
 			{Name: "MEILI_ENV", Value: "production"},

@@ -267,7 +267,7 @@ func (r *MisskeyReconciler) reconcileRedisStandalone(ctx context.Context, m *mis
 		sts.Spec.ServiceName = name
 		sts.Spec.Replicas = int32Ptr(1)
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorFor(m, comp)}
-		sts.Spec.Template.ObjectMeta.Labels = labelsFor(m, comp)
+		sts.Spec.Template.Labels = labelsFor(m, comp)
 		containers := []corev1.Container{
 			{
 				Name:            "redis",
