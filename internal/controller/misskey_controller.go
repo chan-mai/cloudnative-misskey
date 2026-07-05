@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,15 +50,16 @@ import (
 type MisskeyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // event: Recorder配線時のみEventを発行(テスト等の未配線ではno-op)
-func (r *MisskeyReconciler) event(m *misskeyv1alpha1.Misskey, eventType, reason, format string, args ...any) {
+// actionはregardingに対して行った操作(UpperCamelCase)、noteは人間可読メッセージ
+func (r *MisskeyReconciler) event(m *misskeyv1alpha1.Misskey, eventType, reason, action, note string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(m, eventType, reason, format, args...)
+	r.Recorder.Eventf(m, nil, eventType, reason, action, note, args...)
 }
 
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeys,verbs=get;list;watch;create;update;patch;delete
@@ -99,7 +100,7 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	reconcileErr := r.reconcileAll(ctx, &m)
 	if reconcileErr != nil {
-		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "%v", reconcileErr)
+		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "Reconcile", "%v", reconcileErr)
 	}
 	ready, statusErr := r.updateStatus(ctx, &m, reconcileErr)
 	if statusErr != nil {

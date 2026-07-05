@@ -101,7 +101,7 @@ func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1
 		if err := r.Create(ctx, job); err != nil {
 			return false, err
 		}
-		r.event(m, corev1.EventTypeNormal, "MigrationStarted", "migration Job %s を作成 (image %s)", job.Name, m.Spec.Image)
+		r.event(m, corev1.EventTypeNormal, "MigrationStarted", "Migrate", "created migration Job %s (image %s)", job.Name, m.Spec.Image)
 		return false, nil
 	}
 	if err != nil {
@@ -116,10 +116,10 @@ func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1
 			if err := r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
 				return false, err
 			}
-			r.event(m, corev1.EventTypeNormal, "MigrationRetried", "設定変更を検知し失敗したmigration Job %s を再生成", job.Name)
+			r.event(m, corev1.EventTypeNormal, "MigrationRetried", "Migrate", "recreated failed migration Job %s after a configuration change", job.Name)
 			return false, nil
 		}
-		r.event(m, corev1.EventTypeWarning, "MigrationFailed", "migration Job %s が失敗 (%d)。同一設定で再試行するにはJobを削除", job.Name, job.Status.Failed)
+		r.event(m, corev1.EventTypeWarning, "MigrationFailed", "Migrate", "migration Job %s failed (%d); delete the Job to retry with the same configuration", job.Name, job.Status.Failed)
 	}
 	return job.Status.Succeeded >= 1, nil
 }

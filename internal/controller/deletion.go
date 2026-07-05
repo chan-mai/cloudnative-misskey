@@ -54,7 +54,7 @@ func (r *MisskeyReconciler) reconcileDelete(ctx context.Context, m *misskeyv1alp
 		if err := r.retainData(ctx, m); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.event(m, corev1.EventTypeNormal, "DataRetained", "deletionPolicy=Retainによりデータ資源のownerReferenceを剥離")
+		r.event(m, corev1.EventTypeNormal, "DataRetained", "Delete", "detached owner references from data resources per deletionPolicy=Retain")
 	}
 	controllerutil.RemoveFinalizer(m, misskeyFinalizer)
 	return ctrl.Result{}, r.Update(ctx, m)
