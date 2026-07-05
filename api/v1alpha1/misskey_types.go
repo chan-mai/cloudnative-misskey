@@ -150,8 +150,9 @@ type MonitoringSpec struct {
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// Interval is the scrape interval. Default 30s.
+	// Interval is the scrape interval as a Prometheus duration, e.g. 30s, 1m.
 	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:Pattern=`^([0-9]+(ms|s|m|h|d|w|y))+$`
 	// +optional
 	Interval string `json:"interval,omitempty"`
 
@@ -480,8 +481,9 @@ type RedisSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// MaxMemory passes --maxmemory to redis-server.
+	// MaxMemory passes --maxmemory to redis-server, e.g. 400mb, 1gb, or bytes.
 	// +kubebuilder:default="400mb"
+	// +kubebuilder:validation:Pattern=`^[0-9]+([kKmMgG][bB]?|[bB])?$`
 	// +optional
 	MaxMemory string `json:"maxMemory,omitempty"`
 
@@ -574,7 +576,8 @@ type RedisRole struct {
 	// +optional
 	External *ExternalRedis `json:"external,omitempty"`
 
-	// MaxMemory override for this role's managed instance.
+	// MaxMemory override for this role's managed instance, e.g. 400mb, 1gb.
+	// +kubebuilder:validation:Pattern=`^[0-9]+([kKmMgG][bB]?|[bB])?$`
 	// +optional
 	MaxMemory string `json:"maxMemory,omitempty"`
 
@@ -854,7 +857,9 @@ type PostgresBackup struct {
 	// +optional
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
 
-	// Schedule is a 6-field cron for a CNPG ScheduledBackup. Empty disables it.
+	// Schedule is a 6-field cron (with seconds) for a CNPG ScheduledBackup, e.g.
+	// "0 0 3 * * *". Empty disables it.
+	// +kubebuilder:validation:Pattern=`^(\S+\s+){5}\S+$`
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
 }
@@ -875,13 +880,30 @@ type MisskeyStatus struct {
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Phase is a coarse, human-readable state summary.
+	// Phase is a coarse state summary: Progressing (subsystems not all ready),
+	// Running (all ready), or Error (reconcile failed).
+	// +kubebuilder:validation:Enum=Progressing;Running;Error
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
 	// ObservedGeneration is the .metadata.generation last reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// DatabaseHost is the resolved PostgreSQL host apps connect to: the PgBouncer
+	// pooler when enabled, the CNPG read-write service, or the external host.
+	// +optional
+	DatabaseHost string `json:"databaseHost,omitempty"`
+
+	// RedisHost is the resolved Redis host (the operator's Sentinel-managed service
+	// in HA mode).
+	// +optional
+	RedisHost string `json:"redisHost,omitempty"`
+
+	// SearchIndex is the resolved MeiliSearch index name. Empty for non-meilisearch
+	// providers.
+	// +optional
+	SearchIndex string `json:"searchIndex,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -890,7 +912,10 @@ type MisskeyStatus struct {
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.spec.url`
 // +kubebuilder:printcolumn:name="Search",type=string,JSONPath=`.spec.search.provider`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:printcolumn:name="Database",type=string,JSONPath=`.status.databaseHost`,priority=1
+// +kubebuilder:printcolumn:name="Index",type=string,JSONPath=`.status.searchIndex`,priority=1
 
 // Misskey is the Schema for the misskeys API.
 type Misskey struct {

@@ -156,6 +156,17 @@ func TestReconcileIntegration(t *testing.T) {
 		t.Errorf("MigrationComplete!=False: %+v", cur.Status.Conditions)
 	}
 
+	// status: 解決済み接続先(external host/redis, indexはsqlLikeで空)
+	if cur.Status.DatabaseHost != "pg" {
+		t.Errorf("status.databaseHost=%q, want pg", cur.Status.DatabaseHost)
+	}
+	if cur.Status.RedisHost != "redis" {
+		t.Errorf("status.redisHost=%q, want redis", cur.Status.RedisHost)
+	}
+	if cur.Status.SearchIndex != "" {
+		t.Errorf("status.searchIndex=%q, want empty (sqlLike)", cur.Status.SearchIndex)
+	}
+
 	// migration Jobを成功させ再reconcile→app/worker Deployment生成
 	job := &batchv1.Job{}
 	if err := cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, job); err != nil {
@@ -259,6 +270,12 @@ func TestCELValidation(t *testing.T) {
 				Host: "r", Sentinels: []misskeyv1alpha1.RedisHostPort{{Host: "s1"}},
 			}
 		}},
+		// pattern validation(schema)
+		{"invalid maxMemory", func(m *misskeyv1alpha1.Misskey) { m.Spec.Redis.MaxMemory = "lots" }},
+		{"invalid backup schedule", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://b", Schedule: "not-cron"}
+		}},
+		{"invalid monitoring interval", func(m *misskeyv1alpha1.Misskey) { m.Spec.Monitoring.Interval = "30" }},
 	}
 	for i, tc := range cross {
 		m := valid(fmt.Sprintf("cross-%d", i))

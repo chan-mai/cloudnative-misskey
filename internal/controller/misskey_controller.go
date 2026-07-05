@@ -323,6 +323,14 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1
 		}
 		cur.Status.Phase = phase
 		cur.Status.ObservedGeneration = cur.Generation
+		// 解決済みの接続先を運用向けに公開(pooler/rw/external, sentinel service, index)
+		cur.Status.DatabaseHost = p.dbHost
+		cur.Status.RedisHost = p.redisDefault.host
+		if p.meiliEnabled {
+			cur.Status.SearchIndex = p.meiliIndex
+		} else {
+			cur.Status.SearchIndex = ""
+		}
 		return r.Status().Update(ctx, cur)
 	})
 	return ready, client.IgnoreNotFound(err)

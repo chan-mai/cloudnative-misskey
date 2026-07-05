@@ -81,8 +81,15 @@ make docker-build docker-push IMG=ghcr.io/chan-mai/cloud-native-misskey:v0.1.0
 ```bash
 kubectl apply -f config/samples/misskey_v1alpha1_misskey.yaml
 kubectl get misskey
-# NAME      URL                            SEARCH        PHASE     AGE
-# example   https://misskey.example.com/   meilisearch   Running   30s
+# NAME      URL                            SEARCH        PHASE     READY   AGE
+# example   https://misskey.example.com/   meilisearch   Running   True    30s
+```
+
+`phase`は`Progressing`(subsystem未達)/`Running`(全達)/`Error`(reconcile失敗)の3値です。詳細な条件は`conditions`(`DatabaseReady`/`MigrationComplete`/`AppReady`/`WorkerReady`/`ProxyReady`/`IngressReady`と集約`Ready`)で確認します。解決済みの接続先は`kubectl get misskey -o wide`(`Database`/`Index`列)か`status`(`databaseHost`/`redisHost`/`searchIndex`)に出ます:
+
+```bash
+kubectl get misskey example -o jsonpath='{.status.databaseHost}{"\n"}'
+# example-db-pooler-rw   (pooler有効時。無効なら例-db-rw、externalならそのhost)
 ```
 
 `setupPassword`を自動生成させた場合、初回admin登録に使う値は次のように取り出します:

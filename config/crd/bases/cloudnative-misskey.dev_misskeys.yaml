@@ -26,9 +26,20 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.databaseHost
+      name: Database
+      priority: 1
+      type: string
+    - jsonPath: .status.searchIndex
+      name: Index
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -341,7 +352,9 @@ spec:
                     type: boolean
                   interval:
                     default: 30s
-                    description: Interval is the scrape interval. Default 30s.
+                    description: Interval is the scrape interval as a Prometheus duration,
+                      e.g. 30s, 1m.
+                    pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
                     type: string
                   labels:
                     additionalProperties:
@@ -480,8 +493,10 @@ spec:
                         - secretAccessKey
                         type: object
                       schedule:
-                        description: Schedule is a 6-field cron for a CNPG ScheduledBackup.
-                          Empty disables it.
+                        description: |-
+                          Schedule is a 6-field cron (with seconds) for a CNPG ScheduledBackup, e.g.
+                          "0 0 3 * * *". Empty disables it.
+                        pattern: ^(\S+\s+){5}\S+$
                         type: string
                     required:
                     - destinationPath
@@ -963,7 +978,9 @@ spec:
                     type: string
                   maxMemory:
                     default: 400mb
-                    description: MaxMemory passes --maxmemory to redis-server.
+                    description: MaxMemory passes --maxmemory to redis-server, e.g.
+                      400mb, 1gb, or bytes.
+                    pattern: ^[0-9]+([kKmMgG][bB]?|[bB])?$
                     type: string
                   maxMemoryPolicy:
                     default: noeviction
@@ -1146,7 +1163,8 @@ spec:
                             type: object
                           maxMemory:
                             description: MaxMemory override for this role's managed
-                              instance.
+                              instance, e.g. 400mb, 1gb.
+                            pattern: ^[0-9]+([kKmMgG][bB]?|[bB])?$
                             type: string
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
@@ -1340,7 +1358,8 @@ spec:
                             type: object
                           maxMemory:
                             description: MaxMemory override for this role's managed
-                              instance.
+                              instance, e.g. 400mb, 1gb.
+                            pattern: ^[0-9]+([kKmMgG][bB]?|[bB])?$
                             type: string
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
@@ -1534,7 +1553,8 @@ spec:
                             type: object
                           maxMemory:
                             description: MaxMemory override for this role's managed
-                              instance.
+                              instance, e.g. 400mb, 1gb.
+                            pattern: ^[0-9]+([kKmMgG][bB]?|[bB])?$
                             type: string
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
@@ -1728,7 +1748,8 @@ spec:
                             type: object
                           maxMemory:
                             description: MaxMemory override for this role's managed
-                              instance.
+                              instance, e.g. 400mb, 1gb.
+                            pattern: ^[0-9]+([kKmMgG][bB]?|[bB])?$
                             type: string
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
@@ -2408,12 +2429,33 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              databaseHost:
+                description: |-
+                  DatabaseHost is the resolved PostgreSQL host apps connect to: the PgBouncer
+                  pooler when enabled, the CNPG read-write service, or the external host.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the .metadata.generation last reconciled.
                 format: int64
                 type: integer
               phase:
-                description: Phase is a coarse, human-readable state summary.
+                description: |-
+                  Phase is a coarse state summary: Progressing (subsystems not all ready),
+                  Running (all ready), or Error (reconcile failed).
+                enum:
+                - Progressing
+                - Running
+                - Error
+                type: string
+              redisHost:
+                description: |-
+                  RedisHost is the resolved Redis host (the operator's Sentinel-managed service
+                  in HA mode).
+                type: string
+              searchIndex:
+                description: |-
+                  SearchIndex is the resolved MeiliSearch index name. Empty for non-meilisearch
+                  providers.
                 type: string
             type: object
         type: object
