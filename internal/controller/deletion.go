@@ -20,6 +20,7 @@ package controller
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,6 +54,7 @@ func (r *MisskeyReconciler) reconcileDelete(ctx context.Context, m *misskeyv1alp
 		if err := r.retainData(ctx, m); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.event(m, corev1.EventTypeNormal, "DataRetained", "deletionPolicy=Retainによりデータ資源のownerReferenceを剥離")
 	}
 	controllerutil.RemoveFinalizer(m, misskeyFinalizer)
 	return ctrl.Result{}, r.Update(ctx, m)

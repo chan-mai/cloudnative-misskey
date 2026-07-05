@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,12 +46,22 @@ import (
 // Misskeyオブジェクトをreconcileする
 type MisskeyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+}
+
+// event: Recorder配線時のみEventを発行(テスト等の未配線ではno-op)
+func (r *MisskeyReconciler) event(m *misskeyv1alpha1.Misskey, eventType, reason, format string, args ...any) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(m, eventType, reason, format, args...)
 }
 
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeys,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeys/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeys/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets;persistentvolumeclaims;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
@@ -83,6 +94,9 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	reconcileErr := r.reconcileAll(ctx, &m)
+	if reconcileErr != nil {
+		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "%v", reconcileErr)
+	}
 	ready, statusErr := r.updateStatus(ctx, &m, reconcileErr)
 	if statusErr != nil {
 		logger.Error(statusErr, "failed to update status")
