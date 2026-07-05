@@ -66,7 +66,6 @@ type plan struct {
 	dbSlaves       []dbEndpoint // read replica(またはroプーラー)接続先
 
 	// Redis
-	redisManaged bool                     // managed redisインスタンスが1つ以上あるか(reconcile gate)
 	redisDefault redisEndpoint            // 共有redis(redis:ブロック)
 	redisRoles   map[string]redisEndpoint // 分離roleのみ(key=redisRoleDesc.key)
 
@@ -138,7 +137,6 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 	if ext := m.Spec.Redis.External; ext != nil {
 		p.redisDefault = externalRedisEndpoint(ext, "REDIS_PASSWORD")
 	} else {
-		p.redisManaged = true
 		p.redisDefault = managedRedisEndpoint(m, "", "REDIS_PASSWORD", defaultHA)
 	}
 	if roles := m.Spec.Redis.Roles; roles != nil {
@@ -150,7 +148,6 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 			if role.External != nil {
 				p.redisRoles[rd.key] = externalRedisEndpoint(role.External, rd.passEnv)
 			} else {
-				p.redisManaged = true
 				// role単位で独立(role.ha存在=HA)。redis.haの継承はしない
 				p.redisRoles[rd.key] = managedRedisEndpoint(m, rd.nameSuffix, rd.passEnv, role.HA)
 			}

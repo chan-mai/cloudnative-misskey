@@ -88,7 +88,7 @@ func TestResolveManaged(t *testing.T) {
 	if p.dbPassSel.Name != "example-db-app" || p.dbPassSel.Key != "password" {
 		t.Errorf("db password selector wrong: %+v", p.dbPassSel)
 	}
-	if !p.redisManaged || p.redisDefault.host != "example-redis" {
+	if !p.redisDefault.managed || p.redisDefault.host != "example-redis" {
 		t.Errorf("managed redis resolved wrong: %+v", p)
 	}
 	if !p.meiliEnabled || !p.meiliManaged || p.meiliHost != "example-meilisearch" {
@@ -128,7 +128,7 @@ func TestResolveExternal(t *testing.T) {
 	if p.dbPassSel.Name != "pgsec" || p.dbPassSel.Key != "pw" {
 		t.Errorf("external db pass selector wrong: %+v", p.dbPassSel)
 	}
-	if p.redisManaged || p.redisDefault.host != "redis.svc" {
+	if p.redisDefault.managed || p.redisDefault.host != "redis.svc" {
 		t.Errorf("external redis resolved wrong: %+v", p)
 	}
 	if p.meiliManaged || p.meiliHost != "meili.svc" || !p.meiliSSL {
