@@ -38,6 +38,10 @@ spec:
             - --leader-elect
             - --health-probe-bind-address=:8081
             - --metrics-bind-address=:8443
+          env:
+            # webhookはcert必須のため既定off。config/default-webhookのpatchがtrueへ上書き
+            - name: ENABLE_WEBHOOKS
+              value: "false"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
