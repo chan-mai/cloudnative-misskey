@@ -19,6 +19,7 @@ package controller
 
 import (
 	"context"
+	"strconv"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +31,12 @@ import (
 
 	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
 )
+
+// migrationChecksum: migration Jobの入力checksum annotation(migrate config本文+concurrently flag)
+// image変更はJob名(imageHash)で別Jobになるため含めない
+func migrationChecksum(m *misskeyv1alpha1.Misskey, p plan) map[string]string {
+	return checksumAnnotation(renderDefaultYML(m, migratePlan(m, p)), strconv.FormatBool(migrationConcurrentIndexes(m)))
+}
 
 // buildMigrationJob: `pnpm run migrate`を1回だけ実行するJob。app/workerと同じinit/volumeを流用
 func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan) *batchv1.Job {
@@ -56,7 +63,12 @@ func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan) *batchv1.Job {
 		Volumes: misskeyVolumes(m, nameMigrateConfig(m)),
 	}
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: nameMigrate(m), Namespace: m.Namespace, Labels: labelsFor(m, "migrate")},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nameMigrate(m), Namespace: m.Namespace,
+			Labels: labelsFor(m, "migrate"),
+			// 失敗時の再生成判定用(reconcileMigration参照)
+			Annotations: migrationChecksum(m, p),
+		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: int32Ptr(20), // DB起動待ちの猶予
 			Parallelism:  int32Ptr(1),
@@ -89,6 +101,17 @@ func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1
 	}
 	if err != nil {
 		return false, err
+	}
+	// 失敗Jobは入力(DB接続先config/concurrently flag)が変わった時のみ削除して作り直す
+	// (次のreconcileでcreate-if-absentが再生成)。同一入力での失敗は保持し手動削除で再試行とする
+	// CREATE INDEX CONCURRENTLY失敗時のinvalid index堆積等を防ぐため無条件リトライはしない
+	if job.Status.Succeeded == 0 && job.Status.Failed >= 1 &&
+		job.Annotations[configChecksumAnnotation] != migrationChecksum(m, p)[configChecksumAnnotation] {
+		policy := metav1.DeletePropagationBackground
+		if err := r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
+			return false, err
+		}
+		return false, nil
 	}
 	return job.Status.Succeeded >= 1, nil
 }

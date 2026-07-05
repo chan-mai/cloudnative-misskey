@@ -302,6 +302,85 @@ func TestOptOutCleanup(t *testing.T) {
 	}
 }
 
+// TestMigrationRetryOnSpecChange: 失敗したmigration Jobが入力checksum変化時のみ再生成されること
+func TestMigrationRetryOnSpecChange(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "migretry"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+
+	m := &misskeyv1alpha1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: "mg", Namespace: ns},
+		Spec: misskeyv1alpha1.MisskeySpec{
+			URL:    "https://mg.example.com/",
+			Image:  "misskey/misskey:x",
+			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
+			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+				Host: "pg", Database: "d", User: "u",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+			}},
+			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+		},
+	}
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create misskey: %v", err)
+	}
+
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "mg", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	jobKey := types.NamespacedName{Name: nameMigrate(m), Namespace: ns}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+
+	// Jobを失敗させる
+	job := &batchv1.Job{}
+	if err := cl.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	origUID := job.UID
+	job.Status.Failed = 1
+	if err := cl.Status().Update(ctx, job); err != nil {
+		t.Fatalf("job status update: %v", err)
+	}
+
+	// 入力不変 → 失敗Jobは保持(手動削除で再試行の設計)
+	reconcile()
+	if err := cl.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("同一入力の失敗Jobが消された: %v", err)
+	}
+	if job.UID != origUID {
+		t.Error("同一入力なのにJobが作り直された")
+	}
+
+	// 入力変更(concurrently flag) → 失敗Jobを削除し再生成
+	cur := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.Migration.CreateIndexConcurrently = boolPtr(true)
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	reconcile() // 削除
+	reconcile() // 再生成
+	if err := cl.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("checksum変化後にJobが再生成されていない: %v", err)
+	}
+	if job.UID == origUID {
+		t.Error("checksum変化後も古い失敗Jobのまま")
+	}
+	if job.Status.Failed != 0 {
+		t.Errorf("再生成Jobのstatusが引き継がれている: %+v", job.Status)
+	}
+}
+
 // TestCELValidation: CRDのCEL(XValidation)がAPIサーバで常時強制されることを検証
 // webhook非依存でimmutable(url/id/tenant)とcross-field整合が効くこと
 func TestCELValidation(t *testing.T) {
