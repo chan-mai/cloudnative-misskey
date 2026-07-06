@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - misskey_v1alpha1_misskey.yaml
   - misskey_v1alpha1_misskey_external.yaml
+  - misskey_v1alpha1_misskey_objectstorage.yaml

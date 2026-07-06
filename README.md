@@ -162,6 +162,7 @@ spec:
 | `network.egressIsolation.dnsNamespace` | `kube-system` | egress隔離時に`:53`を許すDNS namespace |
 | `tenancy.dedicated` | `false` | namespace占有宣言。`quota`(ResourceQuota)/`limitRange`(LimitRange)生成の前提 |
 | `monitoring.enabled` | `false` | PostgreSQL/Redis/MeiliSearchのServiceMonitor/PodMonitorを生成(opt-in, Prometheus Operator必須)。Redisはexporter、Meiliは`/metrics`を自動有効化。`monitoring.labels`でPrometheus selector合わせ |
+| `objectStorage` | (なし) | S3/R2互換media storage(opt-in)。DBのmetaテーブルへ書込むため詳細は[オブジェクトストレージ](#オブジェクトストレージmedia) |
 | `extraConfig` | (なし) | `default.yml`末尾に追記する生YAML |
 
 ## フォークイメージ
@@ -285,6 +286,33 @@ spec:
 - HA redis(Sentinel+auth)の場合、operatorがsentinel/passwordのTriggerAuthenticationを自動生成します。
 - RPSベースのappスケールは将来対応(Prometheus + KEDA prometheus trigger)。現状はCPU/memoryのみです。
 
+## オブジェクトストレージ(media)
+
+`spec.objectStorage`でS3/R2互換のmedia storageを設定します(opt-in)。Misskeyのobject storage設定は`default.yml`になくDBの`meta`テーブルに入るため、operatorはmigration完了後・app/worker起動前に**psqlでmetaへ書き込む使い捨てJob**を挟みます(`autoConfigure`既定true)。書込はprimaryへ直結し、値は環境変数経由でpsqlが安全にquoteするため、資格情報やbucket名がSQL本文・コマンドライン引数に露出しません。
+
+Cloudflare R2の例:
+
+```yaml
+spec:
+  objectStorage:
+    bucket: my-misskey-media
+    endpoint: <accountid>.r2.cloudflarestorage.com  # schemeは付けない
+    region: auto                                     # R2は空不可
+    baseUrl: https://media.example.com               # R2は公開ドメイン必須(S3 APIエンドポイントは非公開)
+    setPublicRead: false                             # R2はACL非対応。必ずfalse(既定)
+    # s3ForcePathStyle: true (既定)、useSSL: true (既定)
+    credentials:
+      accessKeyId:     { name: r2-credentials, key: ACCESS_KEY_ID }
+      secretAccessKey: { name: r2-credentials, key: SECRET_ACCESS_KEY }
+```
+
+- **既存ファイルは移行されません。** 設定は新規アップロードにのみ適用されます(Misskey本体が移行機構を持たない)。初期セットアップ直後の設定を推奨します。
+- **設定変更時はapp/worker podがrollします。** DB直書きはMisskeyのmeta更新イベント(Redis pub/sub)を発火しないため、稼働中podの古いmeta cacheを畳むべくpodテンプレートのchecksumに設定を織り込んでいます。短時間の再起動が起きます。
+- **無効化はコントロールパネルで。** `objectStorage`ブロックを外すとoperatorはJob/SQL ConfigMapを掃除しますが、metaは触りません(`useObjectStorage=false`へ戻すと既存S3ファイルの配信が壊れる破壊的操作のため)。
+- **`autoConfigure: false`** にすると、値は宣言しつつoperatorはDBに一切触れません。metaへの投入は自分で行ってください(GitOpsで手動管理したい場合等)。
+- **カラム名のカスタマイズ**: フォークや旧バージョンで`meta`のカラム名が異なる場合、`columnNames`で標準13カラムの識別子を個別に上書きできます。モデル化されていないfork固有カラムは`extraColumns`(平文値のみ、秘密は`credentials`へ)で追加できます。識別子は`^[A-Za-z_][A-Za-z0-9_]*$`に制限されます。
+- **psqlイメージ依存**: meta書込Jobは既定でCNPGのPostgreSQLイメージ(psql同梱)を使います。`objectStorage.image`で上書き可能ですが、`\getenv`を使うためpsql 16以上が必要です。
+
 ## 開発
 
 ```bash
@@ -306,7 +334,7 @@ make test-e2e    # kind e2e
 - webhook(`config/default-webhook`、cert-manager必須、opt-in)はCELで表せない補助のみを担います: `tenant`未設定→namespace確定のdefaulting(「未設定→初回設定」の穴塞ぎ)と、エラーにしない警告(external DBで`readOffload`無効、等)。cert-manager無しなら`config/default`(webhook無し)を使います。manager側は`ENABLE_WEBHOOKS=false`が設定済みで、`config/default-webhook`のpatchが`true`へ上書きします。webhook無しの場合`tenant`は生成時に明示してください(defaultingが効かないため)。
 - egress隔離は`spec.network.egressIsolation.enabled`でopt-inです(既定off)。有効時、app/workerはDNS+intra-instance+public(RFC1918/CGNAT/link-local除く)、他backendはDNS+intra-instanceのみに制限し、SSRF/横移動を抑止します。app/workerは連合のため外向きpublicは開けるので、目的は外向き遮断ではなく内部到達の遮断です。DNS namespaceは`network.egressIsolation.dnsNamespace`(既定`kube-system`)で指定します。public許可ルールはIPv4のみ対応で、dual-stackクラスタではIPv6のegressは遮断されます(IPv6で連合する場合は注意)。
 - PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`network.isolation.allowedNamespaces`で明示的に開けてください。
-- **オブジェクトストレージ(media)は本Operatorの責務外です。** これは、Misskeyのオブジェクトストレージ設定はコントロールパネルで行うものであり、`default.yml`から宣言的に投入できないためです。未設定時のアップロードファイルはpodローカル(emptyDir)に置かれ、**pod再起動で消え、複数レプリカ間でも共有されません**。よって`app.replicas>1`で運用する場合は、初期セットアップ後にオブジェクトストレージを設定してください。
+- **オブジェクトストレージ(media)は`spec.objectStorage`で設定できます**([オブジェクトストレージ](#オブジェクトストレージmedia)参照)。未設定時のアップロードファイルはpodローカル(emptyDir)に置かれ、**pod再起動で消え、複数レプリカ間でも共有されません**。よって`app.replicas>1`で運用する場合は`objectStorage`を設定してください。既存アップロード済みファイルは設定後も移行されません(新規アップロードのみ対象)。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
 - 参照Secret(DBパスワード/Meiliキー/Redisパスワード/setupPassword)のローテーションはpodテンプレートのchecksumに反映され、app/worker/失敗中のmigration Jobが自動で追従します。判定はSecretの`resourceVersion`基準のため、値が変わらないmetadata更新でもローリングが起きることがあります。
 - メンテナンス応答は既定HTTP 200のため、外形監視は実ステータスを返す`/api/*`を対象にしてください。

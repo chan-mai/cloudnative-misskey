@@ -1,0 +1,50 @@
+# Object storage (media) on Cloudflare R2. The operator writes these into
+# Misskey's meta table via a one-shot Job after migration (autoConfigure).
+# Existing uploads are not migrated; set this up before users upload files.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: r2-credentials
+type: Opaque
+stringData:
+  ACCESS_KEY_ID: replace-me
+  SECRET_ACCESS_KEY: replace-me
+---
+apiVersion: cloudnative-misskey.dev/v1alpha1
+kind: Misskey
+metadata:
+  name: example-r2
+spec:
+  url: https://misskey.example.com/
+  image: misskey/misskey:2026.6.0
+  setupPassword: {}
+  app: { replicas: 3 }
+  worker: { replicas: 2 }
+
+  objectStorage:
+    bucket: my-misskey-media
+    # R2 S3 API endpoint, without a scheme (scheme is derived from useSSL).
+    endpoint: your-account-id.r2.cloudflarestorage.com
+    region: auto
+    # Public delivery domain (r2.dev or a custom domain). Required for R2,
+    # whose S3 API endpoint is not meant for public delivery.
+    baseUrl: https://media.example.com
+    # R2 does not support object ACLs; this must be false (the default).
+    setPublicRead: false
+    # useSSL: true and s3ForcePathStyle: true are the defaults.
+    credentials:
+      accessKeyId:
+        name: r2-credentials
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: r2-credentials
+        key: SECRET_ACCESS_KEY
+
+    # Fork/older-version override examples (optional):
+    # columnNames:
+    #   bucket: objectStorageBucket
+    # extraColumns:
+    #   objectStorageSomeForkColumn: "value"
+
+    # Declare the settings but do not let the operator write the DB:
+    # autoConfigure: false
