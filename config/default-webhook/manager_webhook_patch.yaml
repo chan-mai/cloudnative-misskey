@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
-  namespace: cloud-native-misskey-system
+  namespace: cloudnative-misskey-system
 spec:
   template:
     spec:

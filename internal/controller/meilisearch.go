@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
 
 // nバイトの暗号学的乱数hex文字列を返す

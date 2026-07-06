@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
 
 // KEDAのGVK。queue深度スケールにScaledObject(+認証時TriggerAuthentication)を使う

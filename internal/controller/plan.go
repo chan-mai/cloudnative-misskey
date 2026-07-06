@@ -23,7 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
 
 // dbEndpoint: dbSlave1件分の接続先(pass は常に${DB_PASSWORD})

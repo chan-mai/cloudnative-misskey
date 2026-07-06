@@ -2,9 +2,9 @@ apiVersion: v1
 kind: Service
 metadata:
   name: webhook-service
-  namespace: cloud-native-misskey-system
+  namespace: cloudnative-misskey-system
   labels:
-    app.kubernetes.io/name: cloud-native-misskey
+    app.kubernetes.io/name: cloudnative-misskey
 spec:
   ports:
     - port: 443

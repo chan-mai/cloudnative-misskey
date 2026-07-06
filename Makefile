@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= ghcr.io/chan-mai/cloud-native-misskey:latest
+IMG ?= ghcr.io/chan-mai/cloudnative-misskey:latest
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
 CONTAINER_TOOL ?= docker

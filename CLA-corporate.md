@@ -1,6 +1,6 @@
 # Corporate Contributor License Agreement (CCLA)
 
-Project: **cloud-native-misskey**
+Project: **cloudnative-misskey**
 Project Owner / Licensee: **chan-mai** (the "Project")
 
 This Corporate Contributor License Agreement ("Agreement") documents the rights granted by a corporation or other legal entity ("You" / "Corporation") to the Project. By executing this Agreement, You accept and agree to the following terms and conditions for Your present and future Contributions submitted to the Project. Except for the license granted herein, You reserve all right, title, and interest in and to Your Contributions.

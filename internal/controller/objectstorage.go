@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
 
 // metaRowID: Misskeyのmetaテーブルの固定主キー(単一行)
@@ -185,7 +185,7 @@ func renderObjectStorageSQL(assigns []objAssign) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
 
-	w("-- Managed by cloud-native-misskey. Do not edit by hand.\n")
+	w("-- Managed by cloudnative-misskey. Do not edit by hand.\n")
 	w("\\set ON_ERROR_STOP on\n")
 	for _, a := range assigns {
 		if a.envName != "" {

@@ -4,5 +4,5 @@ resources:
   - manager.yaml
 images:
   - name: controller
-    newName: ghcr.io/chan-mai/cloud-native-misskey
+    newName: ghcr.io/chan-mai/cloudnative-misskey
     newTag: latest

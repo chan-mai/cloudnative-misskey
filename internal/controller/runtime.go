@@ -17,7 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 package controller
 
-import misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+import misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 
 // upstream misskey/misskeyイメージの既定。fork対応で全てspec.runtimeから上書き可
 const (

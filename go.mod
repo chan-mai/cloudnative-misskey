@@ -1,4 +1,4 @@
-module github.com/chan-mai/cloud-native-misskey
+module github.com/chan-mai/cloudnative-misskey
 
 go 1.26.0
 

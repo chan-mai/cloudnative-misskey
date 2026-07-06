@@ -13,10 +13,10 @@ patches:
       - op: add
         path: /metadata/annotations
         value:
-          cert-manager.io/inject-ca-from: cloud-native-misskey-system/serving-cert
+          cert-manager.io/inject-ca-from: cloudnative-misskey-system/serving-cert
       - op: replace
         path: /webhooks/0/clientConfig/service/namespace
-        value: cloud-native-misskey-system
+        value: cloudnative-misskey-system
   - target:
       group: admissionregistration.k8s.io
       kind: ValidatingWebhookConfiguration
@@ -25,7 +25,7 @@ patches:
       - op: add
         path: /metadata/annotations
         value:
-          cert-manager.io/inject-ca-from: cloud-native-misskey-system/serving-cert
+          cert-manager.io/inject-ca-from: cloudnative-misskey-system/serving-cert
       - op: replace
         path: /webhooks/0/clientConfig/service/namespace
-        value: cloud-native-misskey-system
+        value: cloudnative-misskey-system

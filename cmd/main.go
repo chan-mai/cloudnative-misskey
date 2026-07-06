@@ -32,9 +32,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
-	"github.com/chan-mai/cloud-native-misskey/internal/controller"
-	webhookv1alpha1 "github.com/chan-mai/cloud-native-misskey/internal/webhook/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	"github.com/chan-mai/cloudnative-misskey/internal/controller"
+	webhookv1alpha1 "github.com/chan-mai/cloudnative-misskey/internal/webhook/v1alpha1"
 )
 
 var (
@@ -98,7 +98,7 @@ func main() {
 	if err = (&controller.MisskeyReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("cloud-native-misskey"),
+		Recorder: mgr.GetEventRecorder("cloudnative-misskey"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Misskey")
 		os.Exit(1)

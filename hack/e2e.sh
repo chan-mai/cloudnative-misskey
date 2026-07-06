@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CLUSTER=${E2E_CLUSTER:-cnm-e2e}
-IMG=${IMG:-cloud-native-misskey:e2e}
+IMG=${IMG:-cloudnative-misskey:e2e}
 CERT_MANAGER_VERSION=${CERT_MANAGER_VERSION:-v1.20.3}
 CNPG_VERSION=${CNPG_VERSION:-1.30.0}
 KIND=bin/kind
@@ -33,7 +33,7 @@ $KIND load docker-image "$IMG" --name "$CLUSTER"
 (cd config/manager && ../../$KUSTOMIZE edit set image "controller=$IMG")
 $KUSTOMIZE build config/default-webhook | kubectl apply --server-side -f -
 git checkout -- config/manager/kustomization.yaml
-kubectl -n cloud-native-misskey-system rollout status deploy/controller-manager --timeout=300s
+kubectl -n cloudnative-misskey-system rollout status deploy/controller-manager --timeout=300s
 
 echo ">>> e2e tests"
 go test -tags e2e ./test/e2e/ -v -timeout 25m

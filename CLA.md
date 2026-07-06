@@ -2,10 +2,10 @@
 
 > 日本語要旨: これは個人コントリビュータ向けのライセンス契約です。あなたは著作権を保持したまま、あなたのContributionをProject(chan-mai)が**任意のライセンス(AGPLv3に加え、将来のproprietary/dual-licenseを含む)で再配布・再ライセンスできる**広い許諾を与えます。これはopen-core運営を可能にするための条項です。会社の業務として貢献する場合は[CLA-corporate.md](CLA-corporate.md)も必要です。
 
-Project: **cloud-native-misskey**
+Project: **cloudnative-misskey**
 Project Owner / Licensee: **chan-mai** (the "Project")
 
-Thank you for your interest in contributing to cloud-native-misskey. This Contributor License Agreement ("Agreement") documents the rights granted by contributors to the Project. This is a legally binding document, so please read it carefully before agreeing. By submitting a Contribution to the Project, You accept and agree to the following terms and conditions for Your present and future Contributions submitted to the Project.
+Thank you for your interest in contributing to cloudnative-misskey. This Contributor License Agreement ("Agreement") documents the rights granted by contributors to the Project. This is a legally binding document, so please read it carefully before agreeing. By submitting a Contribution to the Project, You accept and agree to the following terms and conditions for Your present and future Contributions submitted to the Project.
 
 ## 1. Definitions
 

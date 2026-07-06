@@ -1,4 +1,4 @@
-# CloudNativeMisskey
+# CloudNative Misskey
 
 Kubernetes上でMisskeyインスタンスを宣言的に管理するOperatorです。1つの`Misskey`カスタムリソースから、app/worker/proxy/Redis/MeiliSearch/PostgreSQL/Ingressまでを生成します。
 
@@ -65,16 +65,16 @@ helm install keda kedacore/keda -n keda --create-namespace
 
 ```bash
 # リリース添付のinstall manifestを直接適用(CRD+RBAC+controller manager)
-kubectl apply -f https://github.com/chan-mai/cloud-native-misskey/releases/latest/download/install.yaml
+kubectl apply -f https://github.com/chan-mai/cloudnative-misskey/releases/latest/download/install.yaml
 # webhook入り(cert-manager必須)
-kubectl apply -f https://github.com/chan-mai/cloud-native-misskey/releases/latest/download/install-webhook.yaml
+kubectl apply -f https://github.com/chan-mai/cloudnative-misskey/releases/latest/download/install-webhook.yaml
 ```
 
 ソースからの適用:
 
 ```bash
 # CRD+RBAC+controller managerを一括適用
-make deploy IMG=ghcr.io/chan-mai/cloud-native-misskey:v0.1.0
+make deploy IMG=ghcr.io/chan-mai/cloudnative-misskey:v0.1.0
 # CRDのみ入れる
 make install
 ```
@@ -82,7 +82,7 @@ make install
 イメージのbuild/push:
 
 ```bash
-make docker-build docker-push IMG=ghcr.io/chan-mai/cloud-native-misskey:v0.1.0
+make docker-build docker-push IMG=ghcr.io/chan-mai/cloudnative-misskey:v0.1.0
 ```
 
 ## 使い方

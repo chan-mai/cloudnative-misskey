@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
 
 // ワークロードが参照する描画済みconfigのハッシュを保持
@@ -102,7 +102,7 @@ func labelsFor(m *misskeyv1alpha1.Misskey, component string) map[string]string {
 		"app.kubernetes.io/name":         "misskey",
 		"app.kubernetes.io/instance":     m.Name,
 		"app.kubernetes.io/component":    component,
-		"app.kubernetes.io/managed-by":   "cloud-native-misskey",
+		"app.kubernetes.io/managed-by":   "cloudnative-misskey",
 		"cloudnative-misskey.dev/tenant": tenantOf(m),
 	}
 }

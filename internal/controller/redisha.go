@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloud-native-misskey/api/v1alpha1"
+	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
 
 // redisAuthSecretRef: OT operator redisSecret/EnvVarSource用のsecret参照
@@ -140,7 +140,7 @@ func redisUnstructured(m *misskeyv1alpha1.Misskey, suffix string, gvk schema.Gro
 	u.SetNamespace(m.Namespace)
 	// tenant集計/observability用の安全なlabelのみ(instance/component無し)
 	u.SetLabels(map[string]string{
-		"app.kubernetes.io/managed-by":   "cloud-native-misskey",
+		"app.kubernetes.io/managed-by":   "cloudnative-misskey",
 		"cloudnative-misskey.dev/tenant": tenantOf(m),
 	})
 	u.Object["spec"] = spec
