@@ -224,6 +224,31 @@ func (r *MisskeyReconciler) searchCondition(ctx context.Context, m *misskeyv1alp
 	return metav1.ConditionFalse, "Progressing", "0/1 ready"
 }
 
+// objectStorageCondition: meta書込Jobの状態。autoConfigure=falseはUnmanaged(True・非gating)
+func (r *MisskeyReconciler) objectStorageCondition(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
+	if !p.objAutoConfigure {
+		return metav1.ConditionTrue, "Unmanaged", "autoConfigure=false; apply object storage settings to the meta table yourself"
+	}
+	assigns, err := objectStorageAssignments(p)
+	if err != nil {
+		return metav1.ConditionFalse, "InvalidSpec", err.Error()
+	}
+	sql := renderObjectStorageSQL(assigns)
+	hash := r.objectStorageHash(ctx, m, p, sql, assigns)
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, types.NamespacedName{Name: nameObjectStorage(m, hash), Namespace: m.Namespace}, job); err != nil {
+		return metav1.ConditionFalse, "Pending", "meta Job not created"
+	}
+	switch {
+	case job.Status.Succeeded >= 1:
+		return metav1.ConditionTrue, "Configured", "object storage written to the meta table"
+	case job.Status.Failed >= 1:
+		return metav1.ConditionFalse, "Failed", "meta Job failed"
+	default:
+		return metav1.ConditionFalse, "Progressing", "meta Job running"
+	}
+}
+
 // migrationCondition: 現行migration Jobの状態
 func (r *MisskeyReconciler) migrationCondition(ctx context.Context, m *misskeyv1alpha1.Misskey) (metav1.ConditionStatus, string, string) {
 	job := &batchv1.Job{}
@@ -298,17 +323,33 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 	if err := r.reconcileAppService(ctx, m); err != nil {
 		return err
 	}
+	// objectStorage無効 or autoConfigure=false時はJob/SQL CMを掃除(metaは触らない)
+	if !p.objAutoConfigure {
+		if err := r.cleanupObjectStorage(ctx, m); err != nil {
+			return err
+		}
+	}
 	if r.databaseReady(ctx, m, p) {
 		complete, err := r.reconcileMigration(ctx, m, p)
 		if err != nil {
 			return err
 		}
 		if complete {
-			if err := r.reconcileApp(ctx, m, p); err != nil {
-				return err
+			// objectStorage設定をmetaへ投入(autoConfigure時)。書込完了までapp/workerをgate
+			objReady := true
+			if p.objAutoConfigure {
+				objReady, err = r.reconcileObjectStorage(ctx, m, p)
+				if err != nil {
+					return err
+				}
 			}
-			if err := r.reconcileWorker(ctx, m, p); err != nil {
-				return err
+			if objReady {
+				if err := r.reconcileApp(ctx, m, p); err != nil {
+					return err
+				}
+				if err := r.reconcileWorker(ctx, m, p); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -349,6 +390,12 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1
 	}
 	mSt, mR, mM := r.migrationCondition(ctx, m)
 	set = append(set, cnd{"MigrationComplete", mSt, mR, mM})
+	if p.objEnabled {
+		oSt, oR, oM := r.objectStorageCondition(ctx, m, p)
+		set = append(set, cnd{"ObjectStorageConfigured", oSt, oR, oM})
+	} else {
+		remove = append(remove, "ObjectStorageConfigured")
+	}
 	aSt, aR, aM := r.deploymentReady(ctx, m, nameApp(m))
 	set = append(set, cnd{"AppReady", aSt, aR, aM})
 	wSt, wR, wM := r.deploymentReady(ctx, m, nameWorker(m))

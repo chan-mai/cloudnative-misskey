@@ -88,6 +88,25 @@ type plan struct {
 	setupEnabled bool
 	setupManaged bool // operatorがSecretを生成
 	setupSel     corev1.SecretKeySelector
+
+	// objectStorage(S3/R2 media)
+	objEnabled        bool // spec.objectStorage != nil
+	objAutoConfigure  bool // objEnabled かつ autoConfigure(既定true)。falseならoperatorはmeta非管理
+	objBucket         string
+	objEndpoint       string
+	objRegion         string
+	objPrefix         string
+	objBaseURL        string
+	objPort           *int32
+	objUseSSL         bool
+	objUseProxy       bool
+	objSetPublicRead  bool
+	objForcePathStyle bool
+	objAccessKeySel   corev1.SecretKeySelector
+	objSecretKeySel   corev1.SecretKeySelector
+	objColumns        map[string]string // logical key -> 解決済みカラム名
+	objExtra          map[string]string // extraカラム名 -> 平文値
+	objImage          string
 }
 
 // specを既定値適用の上でplanに平坦化
@@ -184,6 +203,28 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 		}
 	}
 
+	// --- ObjectStorage ---
+	if os := m.Spec.ObjectStorage; os != nil {
+		p.objEnabled = true
+		p.objAutoConfigure = boolOr(os.AutoConfigure, true)
+		p.objBucket = os.Bucket
+		p.objEndpoint = os.Endpoint
+		// リージョン概念がない場合の既定。空リージョンはAWS SDKが"Region is missing"で弾く
+		p.objRegion = stringOr(os.Region, "us-east-1")
+		p.objPrefix = os.Prefix
+		p.objBaseURL = os.BaseURL
+		p.objPort = os.Port
+		p.objUseSSL = boolOr(os.UseSSL, true)
+		p.objUseProxy = boolOr(os.UseProxy, true)
+		p.objSetPublicRead = boolOr(os.SetPublicRead, false)
+		p.objForcePathStyle = boolOr(os.S3ForcePathStyle, true)
+		p.objAccessKeySel = os.Credentials.AccessKeyID
+		p.objSecretKeySel = os.Credentials.SecretAccessKey
+		p.objColumns = objectStorageColumns(os.ColumnNames)
+		p.objExtra = os.ExtraColumns
+		p.objImage = stringOr(os.Image, "ghcr.io/cloudnative-pg/postgresql:17")
+	}
+
 	// --- Ingress host ---
 	p.ingressHost = stringOr(m.Spec.Ingress.Host, hostFromURL(m.Spec.URL))
 
@@ -202,6 +243,54 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 	}
 
 	return p
+}
+
+// objectStorageColumnDefaults: metaテーブルのupstream既定カラム名(logical key -> 列名)
+var objectStorageColumnDefaults = map[string]string{
+	"useObjectStorage": "useObjectStorage",
+	"baseUrl":          "objectStorageBaseUrl",
+	"bucket":           "objectStorageBucket",
+	"prefix":           "objectStoragePrefix",
+	"endpoint":         "objectStorageEndpoint",
+	"region":           "objectStorageRegion",
+	"port":             "objectStoragePort",
+	"accessKey":        "objectStorageAccessKey",
+	"secretKey":        "objectStorageSecretKey",
+	"useSSL":           "objectStorageUseSSL",
+	"useProxy":         "objectStorageUseProxy",
+	"setPublicRead":    "objectStorageSetPublicRead",
+	"s3ForcePathStyle": "objectStorageS3ForcePathStyle",
+}
+
+// objectStorageColumns: 既定カラム名にspec.columnNamesの上書きをマージ(fork/旧version対応)
+func objectStorageColumns(c *misskeyv1alpha1.ObjectStorageColumns) map[string]string {
+	out := make(map[string]string, len(objectStorageColumnDefaults))
+	for k, v := range objectStorageColumnDefaults {
+		out[k] = v
+	}
+	if c == nil {
+		return out
+	}
+	for logical, override := range map[string]string{
+		"useObjectStorage": c.UseObjectStorage,
+		"baseUrl":          c.BaseURL,
+		"bucket":           c.Bucket,
+		"prefix":           c.Prefix,
+		"endpoint":         c.Endpoint,
+		"region":           c.Region,
+		"port":             c.Port,
+		"accessKey":        c.AccessKey,
+		"secretKey":        c.SecretKey,
+		"useSSL":           c.UseSSL,
+		"useProxy":         c.UseProxy,
+		"setPublicRead":    c.SetPublicRead,
+		"s3ForcePathStyle": c.S3ForcePathStyle,
+	} {
+		if override != "" {
+			out[logical] = override
+		}
+	}
+	return out
 }
 
 // externalRedisEndpoint: ExternalRedisをendpointへ。Sentinels指定でSentinelモード

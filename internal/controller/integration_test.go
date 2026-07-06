@@ -471,6 +471,271 @@ func TestSecretRotationRollsPods(t *testing.T) {
 	}
 }
 
+// objStorageCR: external backend + objectStorage(sqlLike)のテスト用CR
+func objStorageCR(name, ns string, auto *bool) *misskeyv1alpha1.Misskey {
+	return &misskeyv1alpha1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: misskeyv1alpha1.MisskeySpec{
+			URL:    "https://" + name + ".example.com/",
+			Image:  "misskey/misskey:x",
+			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
+			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+				Host: "pg", Database: "d", User: "u",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+			}},
+			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			ObjectStorage: &misskeyv1alpha1.ObjectStorageSpec{
+				Bucket: "media", Endpoint: "acct.r2.cloudflarestorage.com", Region: "auto", BaseURL: "https://cdn.example.com",
+				AutoConfigure: auto,
+				Credentials: misskeyv1alpha1.S3Credentials{
+					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "ak"},
+					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "sk"},
+				},
+			},
+		},
+	}
+}
+
+func objStorageJobs(t *testing.T, ctx context.Context, cl client.Client, m *misskeyv1alpha1.Misskey) []batchv1.Job {
+	t.Helper()
+	var jobs batchv1.JobList
+	if err := cl.List(ctx, &jobs, client.InNamespace(m.Namespace), client.MatchingLabels(selectorFor(m, "objstorage"))); err != nil {
+		t.Fatalf("list objstorage jobs: %v", err)
+	}
+	return jobs.Items
+}
+
+func succeedJob(t *testing.T, ctx context.Context, cl client.Client, job *batchv1.Job) {
+	t.Helper()
+	job.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, job); err != nil {
+		t.Fatalf("job status update: %v", err)
+	}
+}
+
+// TestObjectStorageGate: objectStorage+autoConfigureで、migration成功後にmeta書込Jobが作られ、
+// その成功までapp/workerがgateされること
+func TestObjectStorageGate(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "objgate"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	if err := cl.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s3", Namespace: ns}, StringData: map[string]string{"ak": "A", "sk": "S"}}); err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+	m := objStorageCR("og", ns, nil)
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "og", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	// migration未完了→objstorage Jobもapp Deploymentも未生成
+	if len(objStorageJobs(t, ctx, cl, m)) != 0 {
+		t.Fatal("objstorage Job created before migration complete")
+	}
+	// migration成功
+	mig := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, mig); err != nil {
+		t.Fatal(err)
+	}
+	succeedJob(t, ctx, cl, mig)
+	reconcile()
+	// objstorage Job生成、app未生成(gate)
+	jobs := objStorageJobs(t, ctx, cl, m)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 objstorage Job after migration, got %d", len(jobs))
+	}
+	if exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) {
+		t.Error("app Deployment created before objstorage Job succeeded")
+	}
+	// SQL ConfigMapが生成されている
+	if !exists(ctx, cl, &corev1.ConfigMap{}, nameObjectStorageSQL(m), ns) {
+		t.Error("objstorage SQL ConfigMap not created")
+	}
+	// objstorage成功→app/worker生成
+	succeedJob(t, ctx, cl, &jobs[0])
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) {
+		t.Error("app Deployment not created after objstorage Job succeeded")
+	}
+	cur := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCondition(cur, "ObjectStorageConfigured", metav1.ConditionTrue) {
+		t.Errorf("ObjectStorageConfigured!=True: %+v", cur.Status.Conditions)
+	}
+}
+
+// TestObjectStorageAutoConfigureFalse: autoConfigure=falseでmeta書込Jobを作らず、
+// app/workerをgateせず、conditionがUnmanagedになること
+func TestObjectStorageAutoConfigureFalse(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "objoff"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	if err := cl.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s3", Namespace: ns}, StringData: map[string]string{"ak": "A", "sk": "S"}}); err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+	m := objStorageCR("oo", ns, boolPtr(false))
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "oo", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	mig := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, mig); err != nil {
+		t.Fatal(err)
+	}
+	succeedJob(t, ctx, cl, mig)
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	// meta書込Jobは作られない、app/workerはmigrationだけでgateされ生成される
+	if len(objStorageJobs(t, ctx, cl, m)) != 0 {
+		t.Error("autoConfigure=false must not create a meta Job")
+	}
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) {
+		t.Error("app Deployment must be created (not gated on objstorage) when autoConfigure=false")
+	}
+	cur := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cur.Status.Conditions {
+		if c.Type == "ObjectStorageConfigured" && c.Reason != "Unmanaged" {
+			t.Errorf("expected Unmanaged reason, got %+v", c)
+		}
+	}
+}
+
+// TestObjectStorageChangeReRuns: 設定変更で新名Jobが作られ旧Jobが掃除されること
+func TestObjectStorageChangeReRuns(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "objchg"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	if err := cl.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s3", Namespace: ns}, StringData: map[string]string{"ak": "A", "sk": "S"}}); err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+	m := objStorageCR("oc", ns, nil)
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "oc", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	mig := &batchv1.Job{}
+	_ = cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, mig)
+	succeedJob(t, ctx, cl, mig)
+	reconcile()
+	first := objStorageJobs(t, ctx, cl, m)
+	if len(first) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(first))
+	}
+	firstName := first[0].Name
+
+	// bucketを変更→新名Job、旧掃除
+	cur := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.ObjectStorage.Bucket = "media2"
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	reconcile()
+	after := objStorageJobs(t, ctx, cl, m)
+	if len(after) != 1 || after[0].Name == firstName {
+		t.Errorf("expected a single new-named job after change, got %v (first %s)", jobNames(after), firstName)
+	}
+}
+
+func jobNames(jobs []batchv1.Job) []string {
+	out := make([]string, 0, len(jobs))
+	for i := range jobs {
+		out = append(out, jobs[i].Name)
+	}
+	return out
+}
+
+// TestObjectStorageRemovalCleanup: ブロック削除でJob+SQL ConfigMapが掃除されること(metaは不問)
+func TestObjectStorageRemovalCleanup(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "objrm"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	if err := cl.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s3", Namespace: ns}, StringData: map[string]string{"ak": "A", "sk": "S"}}); err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+	m := objStorageCR("orm", ns, nil)
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "orm", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+	mig := &batchv1.Job{}
+	_ = cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, mig)
+	succeedJob(t, ctx, cl, mig)
+	reconcile()
+	if len(objStorageJobs(t, ctx, cl, m)) != 1 || !exists(ctx, cl, &corev1.ConfigMap{}, nameObjectStorageSQL(m), ns) {
+		t.Fatal("setup: expected objstorage Job and SQL CM")
+	}
+	// objectStorageブロック削除
+	cur := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.ObjectStorage = nil
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	reconcile()
+	if len(objStorageJobs(t, ctx, cl, m)) != 0 {
+		t.Error("objstorage Job not cleaned up after removal")
+	}
+	if exists(ctx, cl, &corev1.ConfigMap{}, nameObjectStorageSQL(m), ns) {
+		t.Error("objstorage SQL ConfigMap not cleaned up after removal")
+	}
+}
+
 // TestCELValidation: CRDのCEL(XValidation)がAPIサーバで常時強制されることを検証
 // webhook非依存でimmutable(url/id/tenant)とcross-field整合が効くこと
 func TestCELValidation(t *testing.T) {
@@ -549,6 +814,34 @@ func TestCELValidation(t *testing.T) {
 			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://b", Schedule: "not-cron"}
 		}},
 		{"invalid monitoring interval", func(m *misskeyv1alpha1.Misskey) { m.Spec.Monitoring.Interval = "30" }},
+		// objectStorage
+		{"objectStorage without bucket", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.ObjectStorage = &misskeyv1alpha1.ObjectStorageSpec{
+				Credentials: misskeyv1alpha1.S3Credentials{
+					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "ak"},
+					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "sk"},
+				},
+			}
+		}},
+		{"objectStorage endpoint with scheme", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.ObjectStorage = &misskeyv1alpha1.ObjectStorageSpec{
+				Bucket: "b", Endpoint: "https://s3.example.com",
+				Credentials: misskeyv1alpha1.S3Credentials{
+					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "ak"},
+					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "sk"},
+				},
+			}
+		}},
+		{"objectStorage extraColumns invalid identifier", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.ObjectStorage = &misskeyv1alpha1.ObjectStorageSpec{
+				Bucket:       "b",
+				ExtraColumns: map[string]string{"bad col; DROP": "x"},
+				Credentials: misskeyv1alpha1.S3Credentials{
+					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "ak"},
+					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "sk"},
+				},
+			}
+		}},
 	}
 	for i, tc := range cross {
 		m := valid(fmt.Sprintf("cross-%d", i))

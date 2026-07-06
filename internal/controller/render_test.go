@@ -139,6 +139,181 @@ func TestResolveExternal(t *testing.T) {
 	}
 }
 
+func objStorageSpec() *misskeyv1alpha1.ObjectStorageSpec {
+	return &misskeyv1alpha1.ObjectStorageSpec{
+		Bucket:   "media",
+		Endpoint: "acct.r2.cloudflarestorage.com",
+		Region:   "auto",
+		BaseURL:  "https://cdn.example.com",
+		Credentials: misskeyv1alpha1.S3Credentials{
+			AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "ak"},
+			SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "sk"},
+		},
+	}
+}
+
+func TestResolveObjectStorage(t *testing.T) {
+	// 未指定 → 無効・no-op
+	if p := resolve(newMisskey()); p.objEnabled || p.objAutoConfigure {
+		t.Errorf("unset objectStorage must be disabled: %+v", p)
+	}
+
+	// 指定 → 解決値とデフォルト
+	m := newMisskey()
+	m.Spec.ObjectStorage = objStorageSpec()
+	p := resolve(m)
+	if !p.objEnabled || !p.objAutoConfigure {
+		t.Fatalf("objectStorage must be enabled and autoConfigure default true: %+v", p)
+	}
+	if p.objBucket != "media" || p.objEndpoint != "acct.r2.cloudflarestorage.com" || p.objBaseURL != "https://cdn.example.com" {
+		t.Errorf("resolved values wrong: %+v", p)
+	}
+	if !p.objUseSSL || !p.objUseProxy || p.objSetPublicRead || !p.objForcePathStyle {
+		t.Errorf("bool defaults wrong (useSSL/useProxy/!publicRead/forcePathStyle): %+v", p)
+	}
+	if p.objAccessKeySel.Name != "s3" || p.objAccessKeySel.Key != "ak" || p.objSecretKeySel.Key != "sk" {
+		t.Errorf("credential selectors wrong: %+v", p)
+	}
+	if p.objImage != "ghcr.io/cloudnative-pg/postgresql:17" {
+		t.Errorf("default image wrong: %q", p.objImage)
+	}
+
+	mr := newMisskey()
+	os := objStorageSpec()
+	os.Region = ""
+	mr.Spec.ObjectStorage = os
+	// リージョン未指定はus-east-1
+	if pr := resolve(mr); pr.objRegion != "us-east-1" {
+		t.Errorf("empty region must default to us-east-1, got %q", pr.objRegion)
+	}
+	// デフォルトカラム名
+	if p.objColumns["bucket"] != "objectStorageBucket" || p.objColumns["secretKey"] != "objectStorageSecretKey" {
+		t.Errorf("default column names wrong: %+v", p.objColumns)
+	}
+
+	// autoConfigure=false → 無効(operatorはmeta非管理)
+	m2 := newMisskey()
+	m2.Spec.ObjectStorage = objStorageSpec()
+	m2.Spec.ObjectStorage.AutoConfigure = boolPtr(false)
+	if p2 := resolve(m2); !p2.objEnabled || p2.objAutoConfigure {
+		t.Errorf("autoConfigure=false must disable objAutoConfigure while enabled: %+v", p2)
+	}
+
+	// columnNames override
+	m3 := newMisskey()
+	m3.Spec.ObjectStorage = objStorageSpec()
+	m3.Spec.ObjectStorage.ColumnNames = &misskeyv1alpha1.ObjectStorageColumns{Bucket: "s3_bucket", SecretKey: "s3_secret"}
+	p3 := resolve(m3)
+	if p3.objColumns["bucket"] != "s3_bucket" || p3.objColumns["secretKey"] != "s3_secret" {
+		t.Errorf("column override not applied: %+v", p3.objColumns)
+	}
+	if p3.objColumns["endpoint"] != "objectStorageEndpoint" {
+		t.Errorf("non-overridden column must keep default: %+v", p3.objColumns)
+	}
+}
+
+func TestRenderObjectStorageSQL(t *testing.T) {
+	m := newMisskey()
+	m.Spec.ObjectStorage = objStorageSpec()
+	p := resolve(m)
+	assigns, err := objectStorageAssignments(p)
+	if err != nil {
+		t.Fatalf("assignments: %v", err)
+	}
+	sql := renderObjectStorageSQL(assigns)
+
+	// 構造
+	for _, want := range []string{
+		`\set ON_ERROR_STOP on`,
+		`INSERT INTO meta (id) VALUES ('x') ON CONFLICT (id) DO NOTHING;`,
+		`"useObjectStorage" = true`,
+		`"objectStorageBucket" = :'v_bucket'`,
+		`"objectStorageRegion" = :'v_region'`,
+		`"objectStorageAccessKey" = :'v_accessKey'`,
+		`"objectStorageSecretKey" = :'v_secretKey'`,
+		`"objectStoragePort" = NULL`,   // port未指定
+		`"objectStoragePrefix" = NULL`, // prefix未指定
+		`"objectStorageSetPublicRead" = false`,
+		`"objectStorageS3ForcePathStyle" = true`,
+		`\getenv v_bucket OBJVAL_bucket`,
+		`WHERE id = 'x';`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("SQL missing %q:\n%s", want, sql)
+		}
+	}
+
+	// 値・秘密がSQL本文に一切出ない(env経由のみ)
+	for _, leak := range []string{"media", "cdn.example.com", "acct.r2.cloudflarestorage.com"} {
+		if strings.Contains(sql, leak) {
+			t.Errorf("SQL leaks value %q:\n%s", leak, sql)
+		}
+	}
+}
+
+func TestObjectStorageJobEnv(t *testing.T) {
+	m := newMisskey()
+	m.Spec.ObjectStorage = objStorageSpec()
+	assigns, _ := objectStorageAssignments(resolve(m))
+	env := objectStorageJobEnv(assigns)
+	byName := map[string]corev1.EnvVar{}
+	for _, e := range env {
+		byName[e.Name] = e
+	}
+	// 平文値
+	if byName["OBJVAL_bucket"].Value != "media" {
+		t.Errorf("bucket env wrong: %+v", byName["OBJVAL_bucket"])
+	}
+	// 秘密はSecretKeyRef(平文Valueを持たない)
+	ak := byName["OBJVAL_accessKey"]
+	if ak.Value != "" || ak.ValueFrom == nil || ak.ValueFrom.SecretKeyRef == nil || ak.ValueFrom.SecretKeyRef.Key != "ak" {
+		t.Errorf("accessKey must be SecretKeyRef: %+v", ak)
+	}
+	// 未設定optional(region未指定ならenv無し)ではなくregionはobjStorageSpecでauto設定済みなのでenvあり
+	if byName["OBJVAL_region"].Value != "auto" {
+		t.Errorf("region env wrong: %+v", byName["OBJVAL_region"])
+	}
+}
+
+func TestObjectStorageColumnOverrideAndExtra(t *testing.T) {
+	m := newMisskey()
+	os := objStorageSpec()
+	os.ColumnNames = &misskeyv1alpha1.ObjectStorageColumns{Bucket: "s3_bucket"}
+	os.ExtraColumns = map[string]string{"objectStorageSomethingNew": "v"}
+	m.Spec.ObjectStorage = os
+	assigns, err := objectStorageAssignments(resolve(m))
+	if err != nil {
+		t.Fatalf("assignments: %v", err)
+	}
+	sql := renderObjectStorageSQL(assigns)
+	if !strings.Contains(sql, `"s3_bucket" = :'v_bucket'`) {
+		t.Errorf("column override not applied:\n%s", sql)
+	}
+	if !strings.Contains(sql, `"objectStorageSomethingNew" = :'x_0'`) {
+		t.Errorf("extra column not applied:\n%s", sql)
+	}
+}
+
+func TestObjectStorageIdentifierSafety(t *testing.T) {
+	// 不正なoverrideカラム名はreject
+	m := newMisskey()
+	os := objStorageSpec()
+	os.ColumnNames = &misskeyv1alpha1.ObjectStorageColumns{Bucket: `bucket"; DROP TABLE meta; --`}
+	m.Spec.ObjectStorage = os
+	if _, err := objectStorageAssignments(resolve(m)); err == nil {
+		t.Error("malicious column name must be rejected")
+	}
+
+	// extraキーが標準カラムと衝突→reject
+	m2 := newMisskey()
+	os2 := objStorageSpec()
+	os2.ExtraColumns = map[string]string{"objectStorageBucket": "x"}
+	m2.Spec.ObjectStorage = os2
+	if _, err := objectStorageAssignments(resolve(m2)); err == nil {
+		t.Error("extra column colliding with a standard column must be rejected")
+	}
+}
+
 func TestResolveProviderSQLLike(t *testing.T) {
 	m := newMisskey()
 	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLLike

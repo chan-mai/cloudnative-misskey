@@ -131,8 +131,15 @@ func staticReplicas(comp misskeyv1alpha1.ComponentSpec) *int32 {
 }
 
 // misskeyChecksum: app/worker podテンプレートのchecksum annotation
-// config本文に加え参照SecretのresourceVersionを含め、値ローテーションでもローリングさせる
+// config本文+参照SecretのresourceVersion。objectStorage(autoConfigure時)も含め、
+// meta直書きはpub/sub非発火のため設定/カラム/資格情報変更でpodをrollし古いmeta cacheを畳む
 func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) map[string]string {
 	parts := append([]string{renderDefaultYML(m, p)}, r.referencedSecretVersions(ctx, m, p)...)
+	if p.objAutoConfigure {
+		if assigns, err := objectStorageAssignments(p); err == nil {
+			sql := renderObjectStorageSQL(assigns)
+			parts = append(parts, r.objectStorageHash(ctx, m, p, sql, assigns))
+		}
+	}
 	return checksumAnnotation(parts...)
 }

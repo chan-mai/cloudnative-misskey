@@ -202,6 +202,14 @@ func nameRedisAuthSecret(m *misskeyv1alpha1.Misskey) string { return m.Name + "-
 // CNPGが生成するクラスタのアプリ認証情報Secret
 func nameDBAppSecret(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-app" }
 
+// objectStorage meta書込Job名。入力hash先頭10hexで、設定変更時に別Jobとなる
+func nameObjectStorage(m *misskeyv1alpha1.Misskey, hash string) string {
+	return m.Name + "-objstorage-" + hash[:10]
+}
+
+// objectStorage投入SQLのConfigMap(stable名)
+func nameObjectStorageSQL(m *misskeyv1alpha1.Misskey) string { return m.Name + "-objstorage-sql" }
+
 // vへのポインタを返す
 func int32Ptr(v int32) *int32 { return &v }
 

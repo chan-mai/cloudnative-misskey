@@ -19,6 +19,7 @@ package v1alpha1
 
 import (
 	"context"
+	"strings"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -91,6 +92,11 @@ func advisoryWarnings(m *misskeyv1alpha1.Misskey) admission.Warnings {
 	}
 	if m.Spec.Search.Provider == misskeyv1alpha1.SearchSQLPgroonga && pg.External == nil && pg.ImageName == "" {
 		warns = append(warns, "search.provider=sqlPgroonga requires postgres.imageName with the PGroonga extension")
+	}
+	if os := m.Spec.ObjectStorage; os != nil {
+		if os.SetPublicRead != nil && *os.SetPublicRead && strings.Contains(os.Endpoint, "r2.cloudflarestorage.com") {
+			warns = append(warns, "spec.objectStorage.setPublicRead must be false for Cloudflare R2 (it does not support object ACLs)")
+		}
 	}
 	return warns
 }
