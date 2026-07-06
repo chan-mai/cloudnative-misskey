@@ -98,6 +98,15 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 
+	// ダミーのobject storage資格情報。実S3疎通はせず、meta書込Jobが実CNPGへ
+	// UPDATE meta を実行できること(psql/\getenv/SQL構造)を検証する
+	if err := cl.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "s3-creds", Namespace: ns},
+		StringData: map[string]string{"ACCESS_KEY_ID": "dummy", "SECRET_ACCESS_KEY": "dummy"},
+	}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("s3 secret: %v", err)
+	}
+
 	m := &misskeyv1alpha1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: misskeyv1alpha1.MisskeySpec{
@@ -107,6 +116,16 @@ func TestE2E(t *testing.T) {
 			Search:        misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
 			Postgres:      misskeyv1alpha1.PostgresSpec{Instances: 1, Storage: resource.MustParse("2Gi")},
 			Redis:         misskeyv1alpha1.RedisSpec{Storage: resource.MustParse("1Gi")},
+			ObjectStorage: &misskeyv1alpha1.ObjectStorageSpec{
+				Bucket:   "e2e-media",
+				Endpoint: "s3.example.com",
+				Region:   "auto",
+				BaseURL:  "https://media.example.com",
+				Credentials: misskeyv1alpha1.S3Credentials{
+					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-creds"}, Key: "ACCESS_KEY_ID"},
+					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-creds"}, Key: "SECRET_ACCESS_KEY"},
+				},
+			},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -131,22 +150,30 @@ func TestE2E(t *testing.T) {
 		t.Errorf("webhook defaulting: tenant=%q, want %q", got.Spec.Tenant, ns)
 	}
 
-	// 実DBへの実migration完了(CNPG provisioning込み)
-	waitFor("migration Job成功", 12*time.Minute, func(ctx context.Context) (bool, error) {
-		var jobs batchv1.JobList
-		if err := cl.List(ctx, &jobs, client.InNamespace(ns), client.MatchingLabels{
-			"app.kubernetes.io/instance":  name,
-			"app.kubernetes.io/component": "migrate",
-		}); err != nil {
+	jobSucceeded := func(component string) func(context.Context) (bool, error) {
+		return func(ctx context.Context) (bool, error) {
+			var jobs batchv1.JobList
+			if err := cl.List(ctx, &jobs, client.InNamespace(ns), client.MatchingLabels{
+				"app.kubernetes.io/instance":  name,
+				"app.kubernetes.io/component": component,
+			}); err != nil {
+				return false, nil
+			}
+			for i := range jobs.Items {
+				if jobs.Items[i].Status.Succeeded >= 1 {
+					return true, nil
+				}
+			}
 			return false, nil
 		}
-		for i := range jobs.Items {
-			if jobs.Items[i].Status.Succeeded >= 1 {
-				return true, nil
-			}
-		}
-		return false, nil
-	})
+	}
+
+	// 実DBへの実migration完了(CNPG provisioning込み)
+	waitFor("migration Job成功", 12*time.Minute, jobSucceeded("migrate"))
+
+	// meta書込Jobが実CNPGへUPDATE metaを実行して成功すること
+	// (psql/\getenv/INSERT ON CONFLICT+UPDATEの実挙動検証。unit/envtestでは不可)
+	waitFor("object storage meta Job成功", 5*time.Minute, jobSucceeded("objstorage"))
 
 	// 全subsystem Ready(app/worker実起動、probe通過)
 	waitFor("Ready=True", 12*time.Minute, func(ctx context.Context) (bool, error) {
