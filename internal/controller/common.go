@@ -136,9 +136,14 @@ func nameRedisInstance(m *misskeyv1alpha1.Misskey, suffix string) string {
 	return nameRedis(m) + "-" + suffix
 }
 
+// HA replication/sentinelのCR名。standalone STS(<name>-redis)とOT作成STSの名前衝突を避け-ha基底
+func nameRedisHA(m *misskeyv1alpha1.Misskey, suffix string) string {
+	return nameRedisInstance(m, suffix) + "-ha"
+}
+
 // HA時のsentinel Service。OT operatorが<replication名>-sentinelで生成
 func nameRedisSentinelService(m *misskeyv1alpha1.Misskey, suffix string) string {
-	return nameRedisInstance(m, suffix) + "-sentinel"
+	return nameRedisHA(m, suffix) + "-sentinel"
 }
 
 // redisコンポーネントlabel。default="redis"、role="redis-<suffix>"

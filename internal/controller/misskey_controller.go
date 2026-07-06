@@ -171,7 +171,7 @@ func (r *MisskeyReconciler) redisCondition(ctx context.Context, m *misskeyv1alph
 		var ready, desired int32
 		if inst.ha {
 			desired = inst.replicas
-			ready = r.readyPodsByAppLabel(ctx, m.Namespace, name)
+			ready = r.readyPodsByAppLabel(ctx, m.Namespace, nameRedisHA(m, inst.suffix))
 		} else {
 			desired = 1
 			sts := &appsv1.StatefulSet{}

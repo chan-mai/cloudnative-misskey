@@ -73,10 +73,11 @@ func (r *MisskeyReconciler) retainData(ctx context.Context, m *misskeyv1alpha1.M
 	// redisは全suffixのstandalone STS / HA CR
 	for _, suffix := range allRedisSuffixes() {
 		name := nameRedisInstance(m, suffix)
+		haName := nameRedisHA(m, suffix)
 		targets = append(targets,
 			retainTarget{statefulSetGVK, name},
-			retainTarget{redisReplicationGVK, name},
-			retainTarget{redisSentinelGVK, name},
+			retainTarget{redisReplicationGVK, haName},
+			retainTarget{redisSentinelGVK, haName},
 		)
 	}
 	for _, t := range targets {

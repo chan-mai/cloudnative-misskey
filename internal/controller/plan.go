@@ -317,7 +317,7 @@ func managedRedisEndpoint(m *misskeyv1alpha1.Misskey, suffix, passEnv string, ha
 	if ha != nil {
 		return redisEndpoint{
 			// host/portはioredisのsentinelモードでは無視されるがMisskeyのschema上必須
-			host:       nameRedisInstance(m, suffix),
+			host:       nameRedisHA(m, suffix),
 			port:       redisPort,
 			sentinels:  []redisHostPort{{host: nameRedisSentinelService(m, suffix), port: sentinelPort}},
 			masterName: redisMasterGroup,

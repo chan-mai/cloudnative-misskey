@@ -180,7 +180,7 @@ func redisHAPodApps(m *misskeyv1alpha1.Misskey) []string {
 	var apps []string
 	for _, inst := range managedRedisInstances(m) {
 		if inst.ha {
-			apps = append(apps, nameRedisInstance(m, inst.suffix), nameRedisSentinelService(m, inst.suffix))
+			apps = append(apps, nameRedisHA(m, inst.suffix), nameRedisSentinelService(m, inst.suffix))
 		}
 	}
 	return apps

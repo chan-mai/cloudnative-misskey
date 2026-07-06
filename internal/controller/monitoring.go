@@ -89,7 +89,7 @@ func (r *MisskeyReconciler) reconcileMonitoring(ctx context.Context, m *misskeyv
 			desired[name] = true
 			comp := redisComponent(inst.suffix)
 			if inst.ha {
-				pm := buildPodMonitorPort(m, name, comp, map[string]string{"app": nameRedisInstance(m, inst.suffix)}, redisExporterPort)
+				pm := buildPodMonitorPort(m, name, comp, map[string]string{"app": nameRedisHA(m, inst.suffix)}, redisExporterPort)
 				if err := r.applySSA(ctx, m, pm); err != nil {
 					return err
 				}

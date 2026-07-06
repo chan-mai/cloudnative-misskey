@@ -202,7 +202,7 @@ func (r *MisskeyReconciler) reconcileRedisHANetworkPolicy(ctx context.Context, m
 	rp := intstr.FromInt32(redisPort)
 	sp := intstr.FromInt32(sentinelPort)
 	// operatorはCR名をpodのappラベルに付ける(replication=<name>、sentinel=<name>-sentinel)
-	haApps := []string{nameRedisInstance(m, inst.suffix), nameRedisSentinelService(m, inst.suffix)}
+	haApps := []string{nameRedisHA(m, inst.suffix), nameRedisSentinelService(m, inst.suffix)}
 	appIn := metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
 		Key: "app", Operator: metav1.LabelSelectorOpIn, Values: haApps,
 	}}}

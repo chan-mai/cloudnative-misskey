@@ -100,7 +100,7 @@ func buildRedisReplication(m *misskeyv1alpha1.Misskey, inst redisManagedInstance
 	if monitoringEnabled(m) {
 		spec["redisExporter"] = map[string]any{"enabled": true}
 	}
-	return redisUnstructured(m, inst.suffix, redisReplicationGVK, nameRedisInstance(m, inst.suffix), spec)
+	return redisUnstructured(m, inst.suffix, redisReplicationGVK, nameRedisHA(m, inst.suffix), spec)
 }
 
 // buildRedisSentinel: RedisReplicationを監視するRedisSentinel unstructured
@@ -117,7 +117,7 @@ func buildRedisSentinel(m *misskeyv1alpha1.Misskey, inst redisManagedInstance) *
 		},
 		"podSecurityContext": redisHAPodSecurityContext(),
 		"redisSentinelConfig": map[string]any{
-			"redisReplicationName": nameRedisInstance(m, inst.suffix),
+			"redisReplicationName": nameRedisHA(m, inst.suffix),
 			"masterGroupName":      redisMasterGroup,
 			"quorum":               quorum,
 			// sentinelがauth付きmasterを監視するための認証情報
@@ -126,7 +126,7 @@ func buildRedisSentinel(m *misskeyv1alpha1.Misskey, inst redisManagedInstance) *
 			},
 		},
 	}
-	return redisUnstructured(m, inst.suffix, redisSentinelGVK, nameRedisInstance(m, inst.suffix), spec)
+	return redisUnstructured(m, inst.suffix, redisSentinelGVK, nameRedisHA(m, inst.suffix), spec)
 }
 
 // redisUnstructured: 共通のGVK/name/namespace/labels/specを持つunstructuredを組む
@@ -173,7 +173,7 @@ func ptrResources(r corev1.ResourceRequirements) *corev1.ResourceRequirements { 
 
 // deleteRedisHA: 指定suffixのRedisReplication/RedisSentinelを掃除。PVCは残す
 func (r *MisskeyReconciler) deleteRedisHA(ctx context.Context, m *misskeyv1alpha1.Misskey, suffix string) error {
-	name := nameRedisInstance(m, suffix)
+	name := nameRedisHA(m, suffix)
 	for _, gvk := range []schema.GroupVersionKind{redisReplicationGVK, redisSentinelGVK} {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)

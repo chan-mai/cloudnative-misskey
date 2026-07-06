@@ -839,7 +839,7 @@ func TestResolveRedisHADefault(t *testing.T) {
 	if !ep.managed || !ep.ha || ep.masterName != "mymaster" {
 		t.Errorf("HA default endpoint wrong: %+v", ep)
 	}
-	if len(ep.sentinels) != 1 || ep.sentinels[0].host != "example-redis-sentinel" || ep.sentinels[0].port != 26379 {
+	if len(ep.sentinels) != 1 || ep.sentinels[0].host != "example-redis-ha-sentinel" || ep.sentinels[0].port != 26379 {
 		t.Errorf("HA sentinel endpoint wrong: %+v", ep.sentinels)
 	}
 }
@@ -866,7 +866,7 @@ func TestRenderDefaultYMLRedisRolesAndHA(t *testing.T) {
 	}
 	out := renderDefaultYML(m, resolve(m))
 	// default redisとjobQueueはHA sentinel、pubsubはstandalone(sentinelなし)
-	for _, s := range []string{"redis:", "sentinels:", "name: mymaster", "redisForJobQueue:", "host: example-redis-jobqueue-sentinel", "redisForPubsub:", "host: example-redis-pubsub"} {
+	for _, s := range []string{"redis:", "sentinels:", "name: mymaster", "redisForJobQueue:", "host: example-redis-jobqueue-ha-sentinel", "redisForPubsub:", "host: example-redis-pubsub"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("expected %q in\n%s", s, out)
 		}
@@ -908,7 +908,7 @@ func TestBuildRedisReplicationAndSentinel(t *testing.T) {
 	inst := redisInstanceBySuffix(m, "")
 
 	repl := buildRedisReplication(m, inst)
-	if repl.GetKind() != "RedisReplication" || repl.GetName() != "example-redis" {
+	if repl.GetKind() != "RedisReplication" || repl.GetName() != "example-redis-ha" {
 		t.Errorf("replication identity wrong: %s/%s", repl.GetKind(), repl.GetName())
 	}
 	rspec := repl.Object["spec"].(map[string]any)
@@ -935,7 +935,7 @@ func TestBuildRedisReplicationAndSentinel(t *testing.T) {
 		t.Errorf("sentinel clusterSize: %v", sspec["clusterSize"])
 	}
 	rsc := sspec["redisSentinelConfig"].(map[string]any)
-	if rsc["redisReplicationName"] != "example-redis" || rsc["masterGroupName"] != "mymaster" || rsc["quorum"] != "2" {
+	if rsc["redisReplicationName"] != "example-redis-ha" || rsc["masterGroupName"] != "mymaster" || rsc["quorum"] != "2" {
 		t.Errorf("redisSentinelConfig wrong: %+v", rsc)
 	}
 }
@@ -959,7 +959,7 @@ func TestRedisEgressRule(t *testing.T) {
 		}
 		return false
 	}
-	if !has("example-redis") || !has("example-redis-sentinel") {
+	if !has("example-redis-ha") || !has("example-redis-ha-sentinel") {
 		t.Errorf("egress must select redis/sentinel operator pods (app=): %+v", vals)
 	}
 }
@@ -1136,7 +1136,7 @@ func TestBuildScaledObjectSentinelAndOverride(t *testing.T) {
 		t.Errorf("HA jobQueue must use redis-sentinel trigger: %v", trig["type"])
 	}
 	meta := trig["metadata"].(map[string]any)
-	if meta["hosts"] != "example-redis-jobqueue-sentinel.ns.svc" || meta["ports"] != "26379" || meta["sentinelMaster"] != "mymaster" {
+	if meta["hosts"] != "example-redis-jobqueue-ha-sentinel.ns.svc" || meta["ports"] != "26379" || meta["sentinelMaster"] != "mymaster" {
 		t.Errorf("sentinel meta wrong (hosts/ports): %+v", meta)
 	}
 	if meta["listName"] != "custom:deliver:wait" {
