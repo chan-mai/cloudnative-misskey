@@ -24,6 +24,7 @@ import (
 )
 
 // MisskeySpec defines the desired state of a Misskey instance.
+// +kubebuilder:validation:XValidation:rule="has(self.image) != has(self.imageFrom)",message="exactly one of image or imageFrom must be set"
 type MisskeySpec struct {
 	// URL is the public-facing URL of the instance, e.g. https://misskey.example.com/.
 	// Immutable after initialization (enforced by CEL, independent of the webhook).
@@ -33,8 +34,14 @@ type MisskeySpec struct {
 	URL string `json:"url"`
 
 	// Image is the Misskey server container image. The app and worker share it.
-	// +kubebuilder:validation:Required
-	Image string `json:"image"`
+	// Exactly one of image or imageFrom must be set.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ImageFrom resolves the image from a MisskeyChannel, enabling staged
+	// fleet-wide rollouts. Exactly one of image or imageFrom must be set.
+	// +optional
+	ImageFrom *ImageFromSource `json:"imageFrom,omitempty"`
 
 	// IDGenerationMethod is Misskey's note/user id format. Immutable after the
 	// instance has been initialized; when migrating an existing database, set it
@@ -1378,6 +1385,20 @@ type MisskeyStatus struct {
 	// Backup mirrors the CNPG backup status of the managed database.
 	// +optional
 	Backup *BackupStatus `json:"backup,omitempty"`
+
+	// Image is the effective image the instance runs: spec.image, or the
+	// channel-resolved image when spec.imageFrom is set.
+	// +optional
+	Image string `json:"image,omitempty"`
+}
+
+// ImageFromSource resolves the instance image from a fleet-level source.
+type ImageFromSource struct {
+	// Channel is the name of the cluster-scoped MisskeyChannel to follow.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Channel string `json:"channel"`
 }
 
 // BackupStatus mirrors CNPG's backup-related cluster status.
@@ -1417,6 +1438,7 @@ type BackupVerificationStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:printcolumn:name="Database",type=string,JSONPath=`.status.databaseHost`,priority=1
 // +kubebuilder:printcolumn:name="LastBackup",type=date,JSONPath=`.status.backup.lastSuccessfulBackup`,priority=1
+// +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.status.image`,priority=1
 // +kubebuilder:printcolumn:name="Index",type=string,JSONPath=`.status.searchIndex`,priority=1
 
 // Misskey is the Schema for the misskeys API.

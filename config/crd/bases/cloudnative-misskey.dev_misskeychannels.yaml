@@ -1,0 +1,117 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: misskeychannels.cloudnative-misskey.dev
+spec:
+  group: cloudnative-misskey.dev
+  names:
+    kind: MisskeyChannel
+    listKind: MisskeyChannelList
+    plural: misskeychannels
+    shortNames:
+    - mkch
+    singular: misskeychannel
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.image
+      name: Image
+      type: string
+    - jsonPath: .status.instances
+      name: Instances
+      type: integer
+    - jsonPath: .status.updatedInstances
+      name: Updated
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: MisskeyChannel is a cluster-scoped image channel for staged fleet
+          rollouts.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              MisskeyChannelSpec defines a fleet-level image channel that Misskey
+              instances can follow via spec.imageFrom.
+            properties:
+              image:
+                description: Image distributed to the instances following this channel.
+                minLength: 1
+                type: string
+              rollout:
+                description: |-
+                  Rollout staggers image changes across the fleet. Instances are hashed
+                  into 100 stable buckets; each interval another batchPercent of buckets
+                  switches to the new image. Omit for immediate rollout to everyone.
+                properties:
+                  batchPercent:
+                    default: 20
+                    description: BatchPercent of instances switched per interval.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  interval:
+                    default: 1h
+                    description: Interval between batches.
+                    type: string
+                type: object
+            required:
+            - image
+            type: object
+          status:
+            description: MisskeyChannelStatus is the observed rollout state.
+            properties:
+              image:
+                description: Image is the current rollout target the instances converge
+                  to.
+                type: string
+              imageChangedAt:
+                description: ImageChangedAt is when the current rollout started.
+                format: date-time
+                type: string
+              instances:
+                description: Instances following this channel.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the generation this status reflects.
+                format: int64
+                type: integer
+              previousImage:
+                description: PreviousImage is where not-yet-switched instances stay
+                  during a rollout.
+                type: string
+              updatedInstances:
+                description: UpdatedInstances already running the current image.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,11 @@
+# fleet imageチャンネル。spec.imageFrom.channelで参照するMisskeyへ段階配信する
+apiVersion: cloudnative-misskey.dev/v1alpha1
+kind: MisskeyChannel
+metadata:
+  name: stable
+spec:
+  image: misskey/misskey:2026.6.0
+  # rollout省略時はimage変更が即時全インスタンスへ反映
+  rollout:
+    batchPercent: 20  # interval毎に切替える割合
+    interval: 1h

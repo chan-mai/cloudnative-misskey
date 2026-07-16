@@ -76,6 +76,23 @@ rules:
 - apiGroups:
   - cloudnative-misskey.dev
   resources:
+  - misskeychannels
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cloudnative-misskey.dev
+  resources:
+  - misskeychannels/status
+  - misskeys/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - cloudnative-misskey.dev
+  resources:
   - misskeys
   verbs:
   - create
@@ -90,14 +107,6 @@ rules:
   resources:
   - misskeys/finalizers
   verbs:
-  - update
-- apiGroups:
-  - cloudnative-misskey.dev
-  resources:
-  - misskeys/status
-  verbs:
-  - get
-  - patch
   - update
 - apiGroups:
   - keda.sh

@@ -1159,6 +1159,79 @@ func TestIngressAnnotationsIssuerRef(t *testing.T) {
 	}
 }
 
+func TestChannelBucket(t *testing.T) {
+	// 決定性
+	if channelBucket("ns", "a") != channelBucket("ns", "a") {
+		t.Error("bucket must be deterministic")
+	}
+	// 0-99域と分散(全一致しないこと)
+	seen := map[uint32]bool{}
+	for _, n := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		b := channelBucket("ns", n)
+		if b > 99 {
+			t.Errorf("bucket out of range: %d", b)
+		}
+		seen[b] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("buckets not distributed: %v", seen)
+	}
+}
+
+func TestChannelImageFor(t *testing.T) {
+	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
+	ch := func(mutate func(*misskeyv1alpha1.MisskeyChannel)) *misskeyv1alpha1.MisskeyChannel {
+		c := &misskeyv1alpha1.MisskeyChannel{
+			Spec: misskeyv1alpha1.MisskeyChannelSpec{
+				Image:   "v2",
+				Rollout: &misskeyv1alpha1.ChannelRollout{BatchPercent: 20, Interval: metav1.Duration{Duration: time.Hour}},
+			},
+			Status: misskeyv1alpha1.MisskeyChannelStatus{
+				Image: "v2", PreviousImage: "v1", ImageChangedAt: metav1.NewTime(now),
+			},
+		}
+		if mutate != nil {
+			mutate(c)
+		}
+		return c
+	}
+
+	// status未反映のbootstrapはspec直
+	c := ch(func(c *misskeyv1alpha1.MisskeyChannel) { c.Status = misskeyv1alpha1.MisskeyChannelStatus{} })
+	if got := channelImageFor(c, 99, now); got != "v2" {
+		t.Errorf("bootstrap: %s", got)
+	}
+	// rollout未設定は即時全量
+	c = ch(func(c *misskeyv1alpha1.MisskeyChannel) { c.Spec.Rollout = nil })
+	if got := channelImageFor(c, 99, now); got != "v2" {
+		t.Errorf("no rollout: %s", got)
+	}
+	// previous無しは即時全量
+	c = ch(func(c *misskeyv1alpha1.MisskeyChannel) { c.Status.PreviousImage = "" })
+	if got := channelImageFor(c, 99, now); got != "v2" {
+		t.Errorf("no previous: %s", got)
+	}
+	// t=0: 第1バッチ(bucket<20)のみv2
+	c = ch(nil)
+	if got := channelImageFor(c, 19, now); got != "v2" {
+		t.Errorf("t=0 bucket19: %s", got)
+	}
+	if got := channelImageFor(c, 20, now); got != "v1" {
+		t.Errorf("t=0 bucket20: %s", got)
+	}
+	// t=1h: 閾値40
+	if got := channelImageFor(c, 39, now.Add(time.Hour)); got != "v2" {
+		t.Errorf("t=1h bucket39: %s", got)
+	}
+	if got := channelImageFor(c, 40, now.Add(time.Hour)); got != "v1" {
+		t.Errorf("t=1h bucket40: %s", got)
+	}
+	// t=4h: 全量
+	if got := channelImageFor(c, 99, now.Add(4*time.Hour)); got != "v2" {
+		t.Errorf("t=4h bucket99: %s", got)
+	}
+}
+
 func TestBuildScaledObjectRPS(t *testing.T) {
 	m := newMisskey()
 	a := &misskeyv1alpha1.AutoscalingSpec{

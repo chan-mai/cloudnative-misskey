@@ -86,6 +86,7 @@ func (r *MisskeyReconciler) event(m *misskeyv1alpha1.Misskey, eventType, reason,
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses;networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeychannels,verbs=get;list;watch
 // +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters;scheduledbackups;backups;poolers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=redis.redis.opstreelabs.in,resources=redisreplications;redissentinels,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
@@ -112,7 +113,11 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	reconcileErr := r.reconcileAll(ctx, &m)
+	// imageFrom時はChannelからimageを解決(in-memoryのみ, finalizer付与後なのでpersistされない)
+	reconcileErr := r.resolveImage(ctx, &m)
+	if reconcileErr == nil {
+		reconcileErr = r.reconcileAll(ctx, &m)
+	}
 	if reconcileErr != nil {
 		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "Reconcile", "%v", reconcileErr)
 	}
@@ -520,6 +525,8 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1
 			cur.Status.SearchIndex = ""
 		}
 		cur.Status.Backup = r.readBackupStatus(ctx, m, p)
+		// 解決済みimage(imageFrom時はchannel解決値)。channel controllerの追従集計が参照
+		cur.Status.Image = m.Spec.Image
 		return r.Status().Update(ctx, cur)
 	})
 	return ready, client.IgnoreNotFound(err)
@@ -552,6 +559,22 @@ func (r *MisskeyReconciler) readBackupStatus(ctx context.Context, m *misskeyv1al
 	return st
 }
 
+// misskeysForChannel: Channel変更を参照する全namespaceのMisskeyへ広播(image解決の再評価)
+func (r *MisskeyReconciler) misskeysForChannel(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list misskeyv1alpha1.MisskeyList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		m := &list.Items[i]
+		if m.Spec.ImageFrom != nil && m.Spec.ImageFrom.Channel == obj.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(m)})
+		}
+	}
+	return reqs
+}
+
 // misskeysInNamespace: Secret変更を同一namespaceの全Misskeyへ広播(参照Secretのローテ検知)
 // Owns(Secret)は所有分のみ発火するため、CNPG払い出しやユーザ持込Secretの更新はここで拾う
 func (r *MisskeyReconciler) misskeysInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -571,6 +594,7 @@ func (r *MisskeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&misskeyv1alpha1.Misskey{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.misskeysInNamespace)).
+		Watches(&misskeyv1alpha1.MisskeyChannel{}, handler.EnqueueRequestsFromMapFunc(r.misskeysForChannel)).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).

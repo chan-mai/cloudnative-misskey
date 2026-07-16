@@ -135,7 +135,8 @@ spec:
 | フィールド | 既定 | 説明 |
 |---|---|---|
 | `url` | (必須) | 公開URL。初期化後は変更不可 |
-| `image` | (必須) | Misskeyのimage。app/worker共通 |
+| `image` | (どちらか必須) | Misskeyのimage。app/worker共通。`imageFrom`と排他 |
+| `imageFrom.channel` | (どちらか必須) | `MisskeyChannel`からimageを解決し段階ロールアウトに追従。詳細は[fleetのimage管理](#fleetのimage管理misskeychannel) |
 | `idGenerationMethod` | `aidx` | ID方式。初期化後は変更不可 |
 | `deletionPolicy` | `Delete` | CR削除時のデータ資源(CNPG/Redis/Meili/生成key Secret)の扱い。`Retain`でownerRefを外しデータ保持(同名CR再作成で再adopt) |
 | `suspend` | `false` | インスタンス休止。app/workerを0にしmigration等のJob新規作成を停止、proxy/DB/Redis/Meiliは稼働継続で訪問者にはメンテページが出る。phaseは`Suspended` |
@@ -317,6 +318,34 @@ spec:
         # query: 独自PromQLで上書き可(既定は自インスタンスのproxy合計RPS)
       targetCPUUtilizationPercentage: 80  # 任意, cpu floorとして併存
 ```
+
+## fleetのimage管理(MisskeyChannel)
+
+複数インスタンスを運用する場合、cluster-scopedの`MisskeyChannel`でimageを一元管理し、`spec.imageFrom.channel`で参照させると段階ロールアウトができます。
+
+```yaml
+apiVersion: cloudnative-misskey.dev/v1alpha1
+kind: MisskeyChannel
+metadata:
+  name: stable
+spec:
+  image: misskey/misskey:2026.6.0
+  rollout:
+    batchPercent: 20  # interval毎に20%ずつ切替
+    interval: 1h
+---
+apiVersion: cloudnative-misskey.dev/v1alpha1
+kind: Misskey
+spec:
+  imageFrom: { channel: stable }  # imageの代わりに指定(排他)
+```
+
+channelの`image`を更新すると、各インスタンスはnamespace/名前のハッシュで0-99の固定バケットに割当てられ、`interval`ごとに`batchPercent`分のバケットが新imageへ切替わります(migration→app/workerロールの通常経路)。進捗は`kubectl get mkch`のInstances/Updated列と各Misskeyの`status.image`で確認できます。
+
+- `rollout`省略時は即時全量。初回のimage設定も即時です
+- ロールアウト中にさらにimageを変えた場合、未切替インスタンスは新しいimageへ直接ジャンプします(2世代は追跡しない)
+- 参照先channelが存在しないとそのインスタンスはPhase=Errorになります
+- 切替の反映粒度はreconcile周期(既定でready時3分)です
 
 ## オブジェクトストレージ(media)
 

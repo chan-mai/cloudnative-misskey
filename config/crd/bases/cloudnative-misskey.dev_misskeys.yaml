@@ -40,6 +40,10 @@ spec:
       name: LastBackup
       priority: 1
       type: date
+    - jsonPath: .status.image
+      name: Image
+      priority: 1
+      type: string
     - jsonPath: .status.searchIndex
       name: Index
       priority: 1
@@ -331,9 +335,24 @@ spec:
                 - message: idGenerationMethod is immutable
                   rule: self == oldSelf
               image:
-                description: Image is the Misskey server container image. The app
-                  and worker share it.
+                description: |-
+                  Image is the Misskey server container image. The app and worker share it.
+                  Exactly one of image or imageFrom must be set.
                 type: string
+              imageFrom:
+                description: |-
+                  ImageFrom resolves the image from a MisskeyChannel, enabling staged
+                  fleet-wide rollouts. Exactly one of image or imageFrom must be set.
+                properties:
+                  channel:
+                    description: Channel is the name of the cluster-scoped MisskeyChannel
+                      to follow.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - channel
+                type: object
               imagePullSecrets:
                 description: ImagePullSecrets used to pull the Misskey image.
                 items:
@@ -3026,9 +3045,11 @@ spec:
                     type: array
                 type: object
             required:
-            - image
             - url
             type: object
+            x-kubernetes-validations:
+            - message: exactly one of image or imageFrom must be set
+              rule: has(self.image) != has(self.imageFrom)
           status:
             description: MisskeyStatus defines the observed state of a Misskey instance.
             properties:
@@ -3131,6 +3152,11 @@ spec:
                 description: |-
                   DatabaseHost is the resolved PostgreSQL host apps connect to: the PgBouncer
                   pooler when enabled, the CNPG read-write service, or the external host.
+                type: string
+              image:
+                description: |-
+                  Image is the effective image the instance runs: spec.image, or the
+                  channel-resolved image when spec.imageFrom is set.
                 type: string
               observedGeneration:
                 description: ObservedGeneration is the .metadata.generation last reconciled.

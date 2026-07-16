@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -336,6 +337,178 @@ func TestSuspendResume(t *testing.T) {
 	}
 	if !exists(ctx, cl, &autoscalingv2.HorizontalPodAutoscaler{}, nameApp(m), ns) {
 		t.Error("resume後もHPA未生成")
+	}
+}
+
+// TestChannelResolveNoPersist: imageFromの解決値がworkloadに使われ、APIのspec.imageは空のままなこと
+func TestChannelResolveNoPersist(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "chan"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+
+	ch := &misskeyv1alpha1.MisskeyChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable"},
+		Spec:       misskeyv1alpha1.MisskeyChannelSpec{Image: "misskey/misskey:v1"},
+	}
+	if err := cl.Create(ctx, ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	cr := &MisskeyChannelReconciler{Client: cl, Scheme: sch}
+	chReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "stable"}}
+	if _, err := cr.Reconcile(ctx, chReq); err != nil {
+		t.Fatalf("channel reconcile: %v", err)
+	}
+
+	m := &misskeyv1alpha1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: "flt", Namespace: ns},
+		Spec: misskeyv1alpha1.MisskeySpec{
+			URL:       "https://flt.example.com/",
+			ImageFrom: &misskeyv1alpha1.ImageFromSource{Channel: "stable"},
+			Search:    misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
+			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+				Host: "pg", Database: "d", User: "u",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+			}},
+			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+		},
+	}
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create misskey: %v", err)
+	}
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "flt", Namespace: ns}}
+	for i := 0; i < 2; i++ {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+
+	// APIのspec.imageは空のまま(in-memory解決のみ)
+	cur := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Spec.Image != "" {
+		t.Errorf("spec.imageがpersistされた: %q", cur.Spec.Image)
+	}
+	// 解決値はstatusとmigration Job名に現れる
+	if cur.Status.Image != "misskey/misskey:v1" {
+		t.Errorf("status.image=%q, want misskey/misskey:v1", cur.Status.Image)
+	}
+	resolved := cur.DeepCopy()
+	resolved.Spec.Image = "misskey/misskey:v1"
+	if !exists(ctx, cl, &batchv1.Job{}, nameMigrate(resolved), ns) {
+		t.Error("解決済みimageのmigration Job未生成")
+	}
+	// channel側の集計
+	if _, err := cr.Reconcile(ctx, chReq); err != nil {
+		t.Fatalf("channel reconcile: %v", err)
+	}
+	curCh := &misskeyv1alpha1.MisskeyChannel{}
+	if err := cl.Get(ctx, chReq.NamespacedName, curCh); err != nil {
+		t.Fatal(err)
+	}
+	if curCh.Status.Instances != 1 || curCh.Status.UpdatedInstances != 1 {
+		t.Errorf("channel集計: %+v", curCh.Status)
+	}
+}
+
+// TestChannelStagedRollout: batchPercent=50でbucketが50を跨ぐ2インスタンスの片方だけ切替わること
+func TestChannelStagedRollout(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "chan-roll"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+
+	// bucketが50を跨ぐ2つの名前を選ぶ
+	var early, late string
+	for i := 0; i < 100 && (early == "" || late == ""); i++ {
+		name := fmt.Sprintf("inst-%d", i)
+		if channelBucket(ns, name) < 50 {
+			if early == "" {
+				early = name
+			}
+		} else if late == "" {
+			late = name
+		}
+	}
+	if early == "" || late == "" {
+		t.Fatal("bucketが50を跨ぐ名前を発見できず")
+	}
+
+	ch := &misskeyv1alpha1.MisskeyChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "canary"},
+		Spec: misskeyv1alpha1.MisskeyChannelSpec{
+			Image:   "misskey/misskey:v1",
+			Rollout: &misskeyv1alpha1.ChannelRollout{BatchPercent: 50, Interval: metav1.Duration{Duration: time.Hour}},
+		},
+	}
+	if err := cl.Create(ctx, ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	cr := &MisskeyChannelReconciler{Client: cl, Scheme: sch}
+	chReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "canary"}}
+	if _, err := cr.Reconcile(ctx, chReq); err != nil {
+		t.Fatalf("channel reconcile: %v", err)
+	}
+
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	newMK := func(name string) ctrl.Request {
+		m := &misskeyv1alpha1.Misskey{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: misskeyv1alpha1.MisskeySpec{
+				URL:       fmt.Sprintf("https://%s.example.com/", name),
+				ImageFrom: &misskeyv1alpha1.ImageFromSource{Channel: "canary"},
+				Search:    misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
+				Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+					Host: "pg", Database: "d", User: "u",
+					PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+				}},
+				Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			},
+		}
+		if err := cl.Create(ctx, m); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}}
+	}
+	reqEarly, reqLate := newMK(early), newMK(late)
+	statusImage := func(req ctrl.Request) string {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %s: %v", req.Name, err)
+		}
+		cur := &misskeyv1alpha1.Misskey{}
+		if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+			t.Fatal(err)
+		}
+		return cur.Status.Image
+	}
+
+	// 初期状態: 両方v1
+	if a, b := statusImage(reqEarly), statusImage(reqLate); a != "misskey/misskey:v1" || b != "misskey/misskey:v1" {
+		t.Fatalf("初期image: %s / %s", a, b)
+	}
+
+	// image更新→ロールアウト開始。第1バッチ(bucket<50)のみv2
+	curCh := &misskeyv1alpha1.MisskeyChannel{}
+	if err := cl.Get(ctx, chReq.NamespacedName, curCh); err != nil {
+		t.Fatal(err)
+	}
+	curCh.Spec.Image = "misskey/misskey:v2"
+	if err := cl.Update(ctx, curCh); err != nil {
+		t.Fatalf("update channel: %v", err)
+	}
+	if _, err := cr.Reconcile(ctx, chReq); err != nil {
+		t.Fatalf("channel reconcile: %v", err)
+	}
+	if got := statusImage(reqEarly); got != "misskey/misskey:v2" {
+		t.Errorf("early(bucket<50)=%s, want v2", got)
+	}
+	if got := statusImage(reqLate); got != "misskey/misskey:v1" {
+		t.Errorf("late(bucket>=50)=%s, want v1", got)
 	}
 }
 
@@ -1079,6 +1252,12 @@ func TestCELValidation(t *testing.T) {
 			m.Spec.Postgres.Recovery = rec()
 			m.Spec.Postgres.Import = imp()
 		}},
+		{"image+imageFrom", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.ImageFrom = &misskeyv1alpha1.ImageFromSource{Channel: "stable"}
+		}},
+		{"imageもimageFromも無し", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Image = ""
+		}},
 		{"recovery+backup same path without serverName", func(m *misskeyv1alpha1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
 			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey"}
@@ -1159,6 +1338,10 @@ func TestCELValidation(t *testing.T) {
 		{"recovery+backup different path", func(m *misskeyv1alpha1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
 			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk2/misskey"}
+		}},
+		{"imageFromのみ", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Image = ""
+			m.Spec.ImageFrom = &misskeyv1alpha1.ImageFromSource{Channel: "stable"}
 		}},
 	}
 	for i, tc := range positive {
