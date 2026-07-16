@@ -863,6 +863,51 @@ func TestCELValidation(t *testing.T) {
 		}
 	}
 
+	// recovery: 作成時指定はOK、以後の追加・変更・削除は拒否
+	rec := func() *misskeyv1alpha1.PostgresRecovery {
+		return &misskeyv1alpha1.PostgresRecovery{Source: misskeyv1alpha1.RecoverySource{
+			DestinationPath: "s3://bk/misskey", ServerName: "old-db",
+		}}
+	}
+	okRec := valid("ok-rec")
+	okRec.Spec.Postgres.Recovery = rec()
+	if err := cl.Create(ctx, okRec); err != nil {
+		t.Fatalf("recovery at creation must be accepted: %v", err)
+	}
+	recImmutable := []struct {
+		name   string
+		target string
+		mutate func(*misskeyv1alpha1.Misskey)
+	}{
+		{"recovery add after creation", "ok", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Recovery = rec() }},
+		{"recovery targetTime change", "ok-rec", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Recovery.TargetTime = "2026-07-15T00:00:00Z"
+		}},
+		{"recovery serverName change", "ok-rec", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Recovery.Source.ServerName = "other"
+		}},
+		{"recovery removal", "ok-rec", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Recovery = nil }},
+	}
+	for _, tc := range recImmutable {
+		cur := &misskeyv1alpha1.Misskey{}
+		if err := cl.Get(ctx, types.NamespacedName{Name: tc.target, Namespace: ns}, cur); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		tc.mutate(cur)
+		if err := cl.Update(ctx, cur); !apierrors.IsInvalid(err) {
+			t.Errorf("%s must be rejected by CEL, got %v", tc.name, err)
+		}
+	}
+	// 無関係なupdateはrecovery付きでも通る(transition ruleの偽陽性検出)
+	touched := &misskeyv1alpha1.Misskey{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: "ok-rec", Namespace: ns}, touched); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	touched.Labels = map[string]string{"touch": "1"}
+	if err := cl.Update(ctx, touched); err != nil {
+		t.Errorf("unrelated update with recovery must succeed: %v", err)
+	}
+
 	// cross-field: create時にCELが拒否
 	extPG := &misskeyv1alpha1.ExternalPostgres{Host: "pg", Database: "d", User: "u",
 		PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "p"}}
@@ -878,6 +923,18 @@ func TestCELValidation(t *testing.T) {
 		{"backup+external", func(m *misskeyv1alpha1.Misskey) {
 			m.Spec.Postgres.External = extPG
 			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://b"}
+		}},
+		{"recovery+external", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.External = extPG
+			m.Spec.Postgres.Recovery = rec()
+		}},
+		{"recovery+backup same path without serverName", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Recovery = rec()
+			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey"}
+		}},
+		{"recovery+backup same path same serverName", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Recovery = rec()
+			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey", ServerName: "old-db"}
 		}},
 		{"ha+external-redis", func(m *misskeyv1alpha1.Misskey) {
 			m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "r"}
@@ -936,6 +993,28 @@ func TestCELValidation(t *testing.T) {
 		tc.build(m)
 		if err := cl.Create(ctx, m); !apierrors.IsInvalid(err) {
 			t.Errorf("%s must be rejected by CEL, got %v", tc.name, err)
+		}
+	}
+
+	// 肯定: 同一destinationPathでもserverName相違なら許可, 別destinationPathはserverName無しで許可
+	positive := []struct {
+		name  string
+		build func(*misskeyv1alpha1.Misskey)
+	}{
+		{"recovery+backup same path distinct serverName", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Recovery = rec()
+			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey", ServerName: "new-db"}
+		}},
+		{"recovery+backup different path", func(m *misskeyv1alpha1.Misskey) {
+			m.Spec.Postgres.Recovery = rec()
+			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk2/misskey"}
+		}},
+	}
+	for i, tc := range positive {
+		m := valid(fmt.Sprintf("pos-%d", i))
+		tc.build(m)
+		if err := cl.Create(ctx, m); err != nil {
+			t.Errorf("%s must be accepted, got %v", tc.name, err)
 		}
 	}
 }

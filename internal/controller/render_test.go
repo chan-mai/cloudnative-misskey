@@ -815,6 +815,153 @@ func TestBuildPooler(t *testing.T) {
 	}
 }
 
+// recovery付きfixture
+func withRecovery(m *misskeyv1alpha1.Misskey) *misskeyv1alpha1.Misskey {
+	m.Spec.Postgres.Recovery = &misskeyv1alpha1.PostgresRecovery{
+		Source: misskeyv1alpha1.RecoverySource{
+			DestinationPath: "s3://bk/misskey",
+			EndpointURL:     "https://s3.example.com",
+			ServerName:      "old-db",
+			S3Credentials: &misskeyv1alpha1.S3Credentials{
+				AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "id"},
+				SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "secret"},
+			},
+		},
+	}
+	return m
+}
+
+func TestBuildDBClusterInitdbDefaults(t *testing.T) {
+	cluster := buildDBCluster(newMisskey())
+
+	if cluster.GetName() != "example-db" || cluster.GetKind() != "Cluster" {
+		t.Errorf("cluster identity wrong: %s/%s", cluster.GetKind(), cluster.GetName())
+	}
+	spec := cluster.Object["spec"].(map[string]any)
+	initdb := spec["bootstrap"].(map[string]any)["initdb"].(map[string]any)
+	if initdb["database"] != "misskey" || initdb["owner"] != "misskey" {
+		t.Errorf("initdb defaults: %+v", initdb)
+	}
+	if _, ok := initdb["postInitApplicationSQL"]; ok {
+		t.Errorf("postInitApplicationSQL must be absent without pgroonga: %+v", initdb)
+	}
+	if _, ok := spec["externalClusters"]; ok {
+		t.Error("externalClusters must be absent without recovery")
+	}
+	if spec["storage"].(map[string]any)["size"] != "20Gi" {
+		t.Errorf("storage default: %+v", spec["storage"])
+	}
+	labels := spec["inheritedMetadata"].(map[string]any)["labels"].(map[string]any)
+	if labels["app.kubernetes.io/instance"] != "example" {
+		t.Errorf("inherited labels: %+v", labels)
+	}
+}
+
+func TestBuildDBClusterPgroongaInitdb(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLPgroonga
+	spec := buildDBCluster(m).Object["spec"].(map[string]any)
+	initdb := spec["bootstrap"].(map[string]any)["initdb"].(map[string]any)
+	sqls, ok := initdb["postInitApplicationSQL"].([]any)
+	if !ok || len(sqls) != 1 || sqls[0] != "CREATE EXTENSION IF NOT EXISTS pgroonga" {
+		t.Errorf("postInitApplicationSQL: %+v", initdb)
+	}
+}
+
+func TestBuildDBClusterRecovery(t *testing.T) {
+	m := withRecovery(newMisskey())
+	spec := buildDBCluster(m).Object["spec"].(map[string]any)
+
+	bootstrap := spec["bootstrap"].(map[string]any)
+	if _, ok := bootstrap["initdb"]; ok {
+		t.Errorf("initdb must be absent with recovery: %+v", bootstrap)
+	}
+	rec := bootstrap["recovery"].(map[string]any)
+	if rec["source"] != "origin" || rec["database"] != "misskey" || rec["owner"] != "misskey" {
+		t.Errorf("recovery bootstrap: %+v", rec)
+	}
+	if _, ok := rec["recoveryTarget"]; ok {
+		t.Errorf("recoveryTarget must be absent without targetTime: %+v", rec)
+	}
+	ec := spec["externalClusters"].([]any)[0].(map[string]any)
+	if ec["name"] != "origin" {
+		t.Errorf("externalCluster name: %+v", ec)
+	}
+	barman := ec["barmanObjectStore"].(map[string]any)
+	if barman["destinationPath"] != "s3://bk/misskey" || barman["serverName"] != "old-db" || barman["endpointURL"] != "https://s3.example.com" {
+		t.Errorf("barmanObjectStore: %+v", barman)
+	}
+	if barman["wal"].(map[string]any)["maxParallel"] != int64(8) {
+		t.Errorf("wal.maxParallel: %+v", barman["wal"])
+	}
+	if barman["s3Credentials"].(map[string]any)["accessKeyId"].(map[string]any)["name"] != "s3" {
+		t.Errorf("s3Credentials: %+v", barman["s3Credentials"])
+	}
+}
+
+func TestBuildDBClusterRecoveryPgroonga(t *testing.T) {
+	m := withRecovery(newMisskey())
+	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLPgroonga
+	spec := buildDBCluster(m).Object["spec"].(map[string]any)
+	// recovery時は出力しない(拡張は復元データに含まれる)
+	if strings.Contains(fmt.Sprintf("%v", spec), "postInitApplicationSQL") {
+		t.Errorf("postInitApplicationSQL must be absent with recovery:\n%v", spec)
+	}
+}
+
+func TestBuildDBClusterRecoveryTargetTime(t *testing.T) {
+	m := withRecovery(newMisskey())
+	m.Spec.Postgres.Recovery.TargetTime = "2026-07-15T00:00:00+09:00"
+	spec := buildDBCluster(m).Object["spec"].(map[string]any)
+	rt := spec["bootstrap"].(map[string]any)["recovery"].(map[string]any)["recoveryTarget"].(map[string]any)
+	if rt["targetTime"] != "2026-07-15T00:00:00+09:00" {
+		t.Errorf("targetTime: %+v", rt)
+	}
+}
+
+func TestBuildDBClusterBackupServerName(t *testing.T) {
+	m := withRecovery(newMisskey())
+	m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{
+		DestinationPath: "s3://bk/misskey",
+		ServerName:      "example-db-restored",
+	}
+	spec := buildDBCluster(m).Object["spec"].(map[string]any)
+	barman := spec["backup"].(map[string]any)["barmanObjectStore"].(map[string]any)
+	if barman["serverName"] != "example-db-restored" {
+		t.Errorf("backup serverName: %+v", barman)
+	}
+	// recoveryとbackupは併存し双方描画される
+	if _, ok := spec["externalClusters"]; !ok {
+		t.Error("externalClusters missing alongside backup")
+	}
+
+	m.Spec.Postgres.Backup.ServerName = ""
+	spec = buildDBCluster(m).Object["spec"].(map[string]any)
+	barman = spec["backup"].(map[string]any)["barmanObjectStore"].(map[string]any)
+	if _, ok := barman["serverName"]; ok {
+		t.Errorf("empty serverName must be omitted: %+v", barman)
+	}
+}
+
+func TestBuildDBScheduledBackup(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{
+		DestinationPath: "s3://bk/misskey",
+		Schedule:        "0 0 3 * * *",
+	}
+	sb := buildDBScheduledBackup(m)
+	if sb.GetName() != "example-db" || sb.GetKind() != "ScheduledBackup" {
+		t.Errorf("scheduledbackup identity wrong: %s/%s", sb.GetKind(), sb.GetName())
+	}
+	spec := sb.Object["spec"].(map[string]any)
+	if spec["schedule"] != "0 0 3 * * *" || spec["backupOwnerReference"] != "self" {
+		t.Errorf("spec: %+v", spec)
+	}
+	if cl := spec["cluster"].(map[string]any); cl["name"] != "example-db" {
+		t.Errorf("cluster name: %v", cl["name"])
+	}
+}
+
 func TestPoolerHelpers(t *testing.T) {
 	m := newMisskey()
 	if poolerEnabled(m) {

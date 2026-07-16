@@ -101,6 +101,9 @@ type MisskeySpec struct {
 	Search SearchSpec `json:"search,omitempty"`
 
 	// Postgres configures the PostgreSQL backend (CNPG-managed or external).
+	// Defaults to {} so the postgres key always exists and the recovery
+	// immutability rule is always evaluated on updates.
+	// +kubebuilder:default={}
 	// +optional
 	Postgres PostgresSpec `json:"postgres,omitempty"`
 
@@ -829,6 +832,9 @@ type ExternalMeilisearch struct {
 // PostgresSpec configures the PostgreSQL backend.
 // +kubebuilder:validation:XValidation:rule="!(has(self.external) && has(self.pooler))",message="pooler requires managed PostgreSQL; remove postgres.external"
 // +kubebuilder:validation:XValidation:rule="!(has(self.external) && has(self.backup))",message="backup requires managed PostgreSQL; remove postgres.external"
+// +kubebuilder:validation:XValidation:rule="!(has(self.external) && has(self.recovery))",message="recovery requires managed PostgreSQL; remove postgres.external"
+// +kubebuilder:validation:XValidation:rule="has(oldSelf.recovery) == has(self.recovery) && (!has(self.recovery) || self.recovery == oldSelf.recovery)",message="postgres.recovery is immutable: it declares the instance's origin at creation and cannot be added, changed or removed afterwards"
+// +kubebuilder:validation:XValidation:rule="!(has(self.backup) && has(self.recovery)) || self.backup.destinationPath != self.recovery.source.destinationPath || (has(self.backup.serverName) && self.backup.serverName != self.recovery.source.serverName)",message="backup would overwrite the recovery source WAL archive; set postgres.backup.serverName different from recovery.source.serverName when sharing destinationPath"
 type PostgresSpec struct {
 	// External points Misskey at an existing PostgreSQL. When set, CNPG is not used.
 	// +optional
@@ -875,6 +881,13 @@ type PostgresSpec struct {
 	// Backup enables barmanObjectStore backups on the CNPG cluster.
 	// +optional
 	Backup *PostgresBackup `json:"backup,omitempty"`
+
+	// Recovery bootstraps the CNPG cluster from an existing barmanObjectStore
+	// backup instead of initdb (disaster recovery / instance migration). Only
+	// honored at CR creation since CNPG evaluates bootstrap once; immutable and
+	// inert afterwards — leave it in the manifest.
+	// +optional
+	Recovery *PostgresRecovery `json:"recovery,omitempty"`
 
 	// ReadOffload wires Misskey dbReplications onto CNPG standby replicas so reads
 	// are load-balanced off the primary. Defaults on when instances >= 2; set false
@@ -963,6 +976,54 @@ type PostgresBackup struct {
 	// +kubebuilder:validation:Pattern=`^(\S+\s+){5}\S+$`
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
+
+	// ServerName overrides the barman folder name under destinationPath
+	// (defaults to the cluster name "<name>-db"). Required to differ from
+	// recovery.source.serverName when sharing its destinationPath, so the new
+	// cluster does not overwrite the origin WAL archive.
+	// +kubebuilder:validation:MaxLength=255
+	// +optional
+	ServerName string `json:"serverName,omitempty"`
+}
+
+// PostgresRecovery bootstraps the managed CNPG cluster from an existing
+// barmanObjectStore backup instead of initdb.
+type PostgresRecovery struct {
+	// Source is the barmanObjectStore location of the origin cluster's backup.
+	// +kubebuilder:validation:Required
+	Source RecoverySource `json:"source"`
+
+	// TargetTime is an optional RFC3339 timestamp for point-in-time recovery.
+	// Omit to recover to the latest available WAL. CNPG picks the closest
+	// backup completed before the target.
+	// +kubebuilder:validation:Format=date-time
+	// +optional
+	TargetTime string `json:"targetTime,omitempty"`
+}
+
+// RecoverySource locates the origin cluster's backup in an object store.
+type RecoverySource struct {
+	// DestinationPath is the object store path of the backups, e.g. s3://bucket/path.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
+	DestinationPath string `json:"destinationPath"`
+
+	// EndpointURL of the S3-compatible object store.
+	// +kubebuilder:validation:MaxLength=2048
+	// +optional
+	EndpointURL string `json:"endpointURL,omitempty"`
+
+	// ServerName is the origin cluster's folder name under destinationPath,
+	// usually "<old CR name>-db".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	ServerName string `json:"serverName"`
+
+	// S3Credentials references the access/secret keys.
+	// +optional
+	S3Credentials *S3Credentials `json:"s3Credentials,omitempty"`
 }
 
 // S3Credentials references S3-compatible credentials stored in secrets.

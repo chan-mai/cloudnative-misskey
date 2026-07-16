@@ -66,6 +66,7 @@ spec:
       endpointURL: https://s3.example.com
       retentionPolicy: 30d
       schedule: "0 0 3 * * *"
+      # serverName: restored-db  # recoveryと同一destinationPathを使う場合は必須(別名にする)
       s3Credentials:
         accessKeyId:
           name: s3-credentials
@@ -73,6 +74,20 @@ spec:
         secretAccessKey:
           name: s3-credentials
           key: SECRET_ACCESS_KEY
+    # 既存バックアップからのDB復元(DR/インスタンス移行)。CR作成時のみ有効・immutable
+    # recovery:
+    #   source:
+    #     destinationPath: s3://my-bucket/misskey/backups
+    #     endpointURL: https://s3.example.com
+    #     serverName: old-instance-db  # 復元元クラスタのフォルダ名(通常"<旧CR名>-db")
+    #     s3Credentials:
+    #       accessKeyId:
+    #         name: s3-credentials
+    #         key: ACCESS_KEY_ID
+    #       secretAccessKey:
+    #         name: s3-credentials
+    #         key: SECRET_ACCESS_KEY
+    #   targetTime: "2026-07-15T00:00:00+09:00"  # 任意(PITR), 省略で最新WALまで
 
   proxy:
     enabled: true

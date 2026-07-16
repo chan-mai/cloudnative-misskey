@@ -93,6 +93,9 @@ func advisoryWarnings(m *misskeyv1alpha1.Misskey) admission.Warnings {
 	if m.Spec.Search.Provider == misskeyv1alpha1.SearchSQLPgroonga && pg.External == nil && pg.ImageName == "" {
 		warns = append(warns, "search.provider=sqlPgroonga requires postgres.imageName with the PGroonga extension")
 	}
+	if pg.Recovery != nil {
+		warns = append(warns, "spec.postgres.recovery restores an existing database: keep spec.url and spec.idGenerationMethod identical to the source instance, and use a postgres.imageName compatible with the source's PostgreSQL major version and installed extensions")
+	}
 	if os := m.Spec.ObjectStorage; os != nil {
 		if os.SetPublicRead != nil && *os.SetPublicRead && strings.Contains(os.Endpoint, "r2.cloudflarestorage.com") {
 			warns = append(warns, "spec.objectStorage.setPublicRead must be false for Cloudflare R2 (it does not support object ACLs)")

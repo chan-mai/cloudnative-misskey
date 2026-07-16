@@ -152,7 +152,8 @@ spec:
 | `postgres.instances` | 1 | CNPGインスタンス数。2以上でHA |
 | `postgres.readOffload` | instances>=2で自動 | replicaへread振り分け(`dbReplications`)。`false`でopt-out |
 | `postgres.pooler` | (なし) | CNPG PgBouncer pooler(rw/ro)をopt-inで前段化 |
-| `postgres.backup` | (なし) | barmanObjectStoreバックアップ。`schedule`指定でScheduledBackup |
+| `postgres.backup` | (なし) | barmanObjectStoreバックアップ。`schedule`指定でScheduledBackup。`serverName`でアーカイブフォルダ名を上書き(復元先での衝突回避用) |
+| `postgres.recovery` | (なし) | 既存バックアップからのbootstrap復元(DR/移行)。CR作成時のみ有効・immutable。詳細は[バックアップからの復元](#バックアップからの復元drインスタンス移行) |
 | `migration.createIndexConcurrently` | `false` | `true`で`MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY=1`。note等の巨大表index作成の書込ロックを避ける(opt-in) |
 | `proxy.enabled` | `true` | Caddy proxyの有無 |
 | `ingress.className` | `nginx` | ingressClassName |
@@ -322,6 +323,33 @@ spec:
 - **カラム名のカスタマイズ**: フォークや旧バージョンで`meta`のカラム名が異なる場合、`columnNames`で標準13カラムの識別子を個別に上書きできます。モデル化されていないfork固有カラムは`extraColumns`(平文値のみ、秘密は`credentials`へ)で追加できます。識別子は`^[A-Za-z_][A-Za-z0-9_]*$`に制限されます。
 - **psqlイメージ依存**: meta書込Jobは既定でCNPGのPostgreSQLイメージ(psql同梱)を使います。`objectStorage.image`で上書き可能ですが、`\getenv`を使うためpsql 16以上が必要です。
 
+## バックアップからの復元(DR/インスタンス移行)
+
+`spec.postgres.recovery`で、`postgres.backup`が書き出したbarmanObjectStoreバックアップからDBをbootstrap復元できます(CNPGの`bootstrap.recovery`)。**復元=新しいCRの作成**です。既存インスタンスのDBを入れ替えるin-place復元機構はありません。
+
+```yaml
+spec:
+  postgres:
+    recovery:
+      source:
+        destinationPath: s3://my-bucket/misskey/backups
+        endpointURL: https://s3.example.com
+        serverName: old-instance-db   # 復元元のフォルダ名(通常"<旧CR名>-db")
+        s3Credentials:
+          accessKeyId:     { name: s3-credentials, key: ACCESS_KEY_ID }
+          secretAccessKey: { name: s3-credentials, key: SECRET_ACCESS_KEY }
+      targetTime: "2026-07-15T00:00:00+09:00"  # 任意(PITR)。省略で最新WALまで
+```
+
+復元完了後はCNPGが`<name>-db-app` Secretを生成しownerパスワードを整合させるため、そのままmigration Job → app/worker起動という通常のライフサイクルに乗ります。
+
+- **recoveryはCR作成時のみ有効・immutable。** CNPGはbootstrapをCluster作成時にしか評価しないため、作成後の追加・変更・削除はCELが拒否します。復元済みインスタンスのmanifestにrecoveryブロックを残したままにしてください(出自の宣言としてgitに残る)。
+- **`spec.url`と`spec.idGenerationMethod`は復元元と同一にしてください。** 不一致はfederationとID生成を破壊します(webhook有効時は警告が出ます)。
+- **同一バケットへ継続バックアップするなら`backup.serverName`を別名に。** 復元元と同じ`destinationPath`のまま新クラスタがWALアーカイブを始めると復元元アーカイブを上書きするため、CELが`recovery.source.serverName`と異なる`backup.serverName`を強制します。復元後は早めに初回フルバックアップを取ってください。
+- **復元されるのはDBのみ。** メディアはobject storage参照なので同一バケットを使い続ければ無傷、MeiliSearchインデックスは再構築、Redisのjob queueは失われます。
+- **`<name>-db`のCNPG Clusterが既に存在する場合、recoveryは無視されます**(既存クラスタをadoptするため)。`deletionPolicy: Retain`で残したClusterを同名CRで引き取る運用とは排他です。
+- CNPG 1.26でin-tree barmanObjectStoreはdeprecated(Barman Cloud Plugin推奨)。backup/recoveryのplugin移行は今後の課題です。
+
 ## 開発
 
 ```bash
@@ -339,7 +367,7 @@ make test-e2e    # kind e2e
 - migration Jobが失敗し切った場合(BackoffLimit超過)、DB接続先やmigrationフラグ等のspec変更時は自動で作り直されます。同一設定のまま再試行するには`kubectl delete job <name>-migrate-<hash>`で削除すると、次のreconcileで再生成されます(同一入力の失敗を無限リトライしないのは、`createIndexConcurrently`失敗時のinvalid index堆積等を避けるためです)。
 - `Ready`/`Phase`はDB/Redis/MeiliSearch/migration/app/worker/proxy/Ingressの全conditionsの集約です。managed Redis/MeiliSearchはSTS(HAはpod)のready数、externalは常にTrueとして扱います。
 - appのオートスケールはCPU/memory(native HPA)のみです。RPSベース(Prometheus + KEDA prometheus trigger)は将来対応です。
-- immutable検証(`url`/`idGenerationMethod`/`tenant`)とcross-field整合(managed/external排他、pooler/backupのmanaged必須、autoscaling min<=max、redis role排他)はCRDのCEL(`x-kubernetes-validations`)で**常時**強制します。APIサーバが直接弾くため、webhook未導入でも効きます。
+- immutable検証(`url`/`idGenerationMethod`/`tenant`/`postgres.recovery`)とcross-field整合(managed/external排他、pooler/backup/recoveryのmanaged必須、recoveryとbackupのWALアーカイブ衝突防止、autoscaling min<=max、redis role排他)はCRDのCEL(`x-kubernetes-validations`)で**常時**強制します。APIサーバが直接弾くため、webhook未導入でも効きます。
 - webhook(`config/default-webhook`、cert-manager必須、opt-in)はCELで表せない補助のみを担います: `tenant`未設定→namespace確定のdefaulting(「未設定→初回設定」の穴塞ぎ)と、エラーにしない警告(external DBで`readOffload`無効、等)。cert-manager無しなら`config/default`(webhook無し)を使います。manager側は`ENABLE_WEBHOOKS=false`が設定済みで、`config/default-webhook`のpatchが`true`へ上書きします。webhook無しの場合`tenant`は生成時に明示してください(defaultingが効かないため)。
 - egress隔離は`spec.network.egressIsolation.enabled`でopt-inです(既定off)。有効時、app/workerはDNS+intra-instance+public(RFC1918/CGNAT/link-local除く)、他backendはDNS+intra-instanceのみに制限し、SSRF/横移動を抑止します。app/workerは連合のため外向きpublicは開けるので、目的は外向き遮断ではなく内部到達の遮断です。DNS namespaceは`network.egressIsolation.dnsNamespace`(既定`kube-system`)で指定します。public許可ルールはIPv4のみ対応で、dual-stackクラスタではIPv6のegressは遮断されます(IPv6で連合する場合は注意)。
 - PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`network.isolation.allowedNamespaces`で明示的に開けてください。

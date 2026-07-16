@@ -39,6 +39,9 @@ var (
 	}
 )
 
+// recovery bootstrapが参照するexternalClustersエントリのローカル名
+const recoveryOriginName = "origin"
+
 // poolerEnabled: spec.postgres.poolerが在ればenabled(default true)
 func poolerEnabled(m *misskeyv1alpha1.Misskey) bool {
 	return m.Spec.Postgres.Pooler != nil
@@ -52,18 +55,37 @@ func readOffloadActive(m *misskeyv1alpha1.Misskey) bool {
 // managedデータベース用にCNPG Cluster(とScheduledBackup)を作成/更新
 // spec.postgres.external設定時はno-op
 func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+	if err := r.applySSA(ctx, m, buildDBCluster(m)); err != nil {
+		return err
+	}
+
+	// 任意のスケジュールバックアップ
+	if m.Spec.Postgres.Backup == nil || m.Spec.Postgres.Backup.Schedule == "" {
+		return nil
+	}
+	return r.applySSA(ctx, m, buildDBScheduledBackup(m))
+}
+
+// backupとrecovery externalClusterで共用するbarman s3Credentials
+func s3CredentialsMap(c *misskeyv1alpha1.S3Credentials) map[string]any {
+	return map[string]any{
+		"accessKeyId": map[string]any{
+			"name": c.AccessKeyID.Name,
+			"key":  c.AccessKeyID.Key,
+		},
+		"secretAccessKey": map[string]any{
+			"name": c.SecretAccessKey.Name,
+			"key":  c.SecretAccessKey.Key,
+		},
+	}
+}
+
+// buildDBCluster: CNPG Clusterを組み立てる
+// bootstrapはrecovery設定時にbarmanObjectStoreからの復元、通常はinitdb
+// bootstrapはCNPGがCluster作成時のみ評価するため、recoveryは既存クラスタに対して不活性
+func buildDBCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
 	pg := m.Spec.Postgres
 	storageSize := quantityOr(pg.Storage, "20Gi")
-
-	initdb := map[string]any{
-		"database": stringOr(pg.Database, "misskey"),
-		"owner":    stringOr(pg.Owner, "misskey"),
-	}
-	// PGroonga全文検索では、init時にアプリケーションDBへ拡張を作成
-	// postgres.imageNameでPGroonga有効イメージが必要。既定イメージだとCNPGのbootstrapが黙らず明示的に失敗する
-	if m.Spec.Search.Provider == misskeyv1alpha1.SearchSQLPgroonga {
-		initdb["postInitApplicationSQL"] = []any{"CREATE EXTENSION IF NOT EXISTS pgroonga"}
-	}
 
 	// CNPGが生成する全リソース(DB pod含む)に自前のラベルを継承させる
 	inheritedLabels := map[string]any{}
@@ -80,9 +102,48 @@ func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1a
 		"storage": map[string]any{
 			"size": storageSize.String(),
 		},
-		"bootstrap": map[string]any{
-			"initdb": initdb,
-		},
+	}
+
+	if rec := pg.Recovery; rec != nil {
+		// database/ownerをinitdbと同値で宣言し、復元完了後の<name>-db-app Secret生成と
+		// ownerパスワードの整合をCNPGに任せる(plan.goのdbPassSel参照がそのまま成立)
+		recovery := map[string]any{
+			"source":   recoveryOriginName,
+			"database": stringOr(pg.Database, "misskey"),
+			"owner":    stringOr(pg.Owner, "misskey"),
+		}
+		if rec.TargetTime != "" {
+			recovery["recoveryTarget"] = map[string]any{"targetTime": rec.TargetTime}
+		}
+		spec["bootstrap"] = map[string]any{"recovery": recovery}
+
+		// wal.maxParallelはWALリプレイfetchの並列化, 復元所要時間短縮の妥当な既定として焼き込み
+		barman := map[string]any{
+			"destinationPath": rec.Source.DestinationPath,
+			"serverName":      rec.Source.ServerName,
+			"wal":             map[string]any{"maxParallel": int64(8)},
+		}
+		if rec.Source.EndpointURL != "" {
+			barman["endpointURL"] = rec.Source.EndpointURL
+		}
+		if rec.Source.S3Credentials != nil {
+			barman["s3Credentials"] = s3CredentialsMap(rec.Source.S3Credentials)
+		}
+		spec["externalClusters"] = []any{
+			map[string]any{"name": recoveryOriginName, "barmanObjectStore": barman},
+		}
+	} else {
+		initdb := map[string]any{
+			"database": stringOr(pg.Database, "misskey"),
+			"owner":    stringOr(pg.Owner, "misskey"),
+		}
+		// PGroonga全文検索では、init時にアプリケーションDBへ拡張を作成
+		// postgres.imageNameでPGroonga有効イメージが必要。既定イメージだとCNPGのbootstrapが黙らず明示的に失敗する
+		// recovery時は不要(拡張は復元データに含まれる)
+		if m.Spec.Search.Provider == misskeyv1alpha1.SearchSQLPgroonga {
+			initdb["postInitApplicationSQL"] = []any{"CREATE EXTENSION IF NOT EXISTS pgroonga"}
+		}
+		spec["bootstrap"] = map[string]any{"initdb": initdb}
 	}
 
 	if pg.StorageClassName != nil && *pg.StorageClassName != "" {
@@ -110,17 +171,12 @@ func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1a
 		if b.EndpointURL != "" {
 			barman["endpointURL"] = b.EndpointURL
 		}
+		// 復元元とdestinationPath共有時のWALアーカイブ衝突回避用(既定はクラスタ名)
+		if b.ServerName != "" {
+			barman["serverName"] = b.ServerName
+		}
 		if b.S3Credentials != nil {
-			barman["s3Credentials"] = map[string]any{
-				"accessKeyId": map[string]any{
-					"name": b.S3Credentials.AccessKeyID.Name,
-					"key":  b.S3Credentials.AccessKeyID.Key,
-				},
-				"secretAccessKey": map[string]any{
-					"name": b.S3Credentials.SecretAccessKey.Name,
-					"key":  b.S3Credentials.SecretAccessKey.Key,
-				},
-			}
+			barman["s3Credentials"] = s3CredentialsMap(b.S3Credentials)
 		}
 		spec["backup"] = map[string]any{
 			"barmanObjectStore": barman,
@@ -134,25 +190,22 @@ func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1a
 	cluster.SetNamespace(m.Namespace)
 	cluster.SetLabels(labelsFor(m, "postgres"))
 	cluster.Object["spec"] = spec
-	if err := r.applySSA(ctx, m, cluster); err != nil {
-		return err
-	}
+	return cluster
+}
 
-	// 任意のスケジュールバックアップ
-	if pg.Backup == nil || pg.Backup.Schedule == "" {
-		return nil
-	}
+// buildDBScheduledBackup: backup.schedule設定時のCNPG ScheduledBackup
+func buildDBScheduledBackup(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
 	sb := &unstructured.Unstructured{}
 	sb.SetGroupVersionKind(cnpgScheduledBackupGVK)
 	sb.SetName(nameDB(m))
 	sb.SetNamespace(m.Namespace)
 	sb.SetLabels(labelsFor(m, "postgres"))
 	sb.Object["spec"] = map[string]any{
-		"schedule":             pg.Backup.Schedule,
+		"schedule":             m.Spec.Postgres.Backup.Schedule,
 		"backupOwnerReference": "self",
 		"cluster":              map[string]any{"name": nameDB(m)},
 	}
-	return r.applySSA(ctx, m, sb)
+	return sb
 }
 
 // reconcilePoolers: pooler有効時にrw(書込)と、read offload有効時ro(読取)のCNPG Poolerをapply

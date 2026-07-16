@@ -714,8 +714,11 @@ spec:
                     type: integer
                 type: object
               postgres:
-                description: Postgres configures the PostgreSQL backend (CNPG-managed
-                  or external).
+                default: {}
+                description: |-
+                  Postgres configures the PostgreSQL backend (CNPG-managed or external).
+                  Defaults to {} so the postgres key always exists and the recovery
+                  immutability rule is always evaluated on updates.
                 properties:
                   backup:
                     description: Backup enables barmanObjectStore backups on the CNPG
@@ -793,6 +796,14 @@ spec:
                           Schedule is a 6-field cron (with seconds) for a CNPG ScheduledBackup, e.g.
                           "0 0 3 * * *". Empty disables it.
                         pattern: ^(\S+\s+){5}\S+$
+                        type: string
+                      serverName:
+                        description: |-
+                          ServerName overrides the barman folder name under destinationPath
+                          (defaults to the cluster name "<name>-db"). Required to differ from
+                          recovery.source.serverName when sharing its destinationPath, so the new
+                          cluster does not overwrite the origin WAL archive.
+                        maxLength: 255
                         type: string
                     required:
                     - destinationPath
@@ -964,6 +975,106 @@ spec:
                       are load-balanced off the primary. Defaults on when instances >= 2; set false
                       to opt out.
                     type: boolean
+                  recovery:
+                    description: |-
+                      Recovery bootstraps the CNPG cluster from an existing barmanObjectStore
+                      backup instead of initdb (disaster recovery / instance migration). Only
+                      honored at CR creation since CNPG evaluates bootstrap once; immutable and
+                      inert afterwards — leave it in the manifest.
+                    properties:
+                      source:
+                        description: Source is the barmanObjectStore location of the
+                          origin cluster's backup.
+                        properties:
+                          destinationPath:
+                            description: DestinationPath is the object store path
+                              of the backups, e.g. s3://bucket/path.
+                            maxLength: 2048
+                            minLength: 1
+                            type: string
+                          endpointURL:
+                            description: EndpointURL of the S3-compatible object store.
+                            maxLength: 2048
+                            type: string
+                          s3Credentials:
+                            description: S3Credentials references the access/secret
+                              keys.
+                            properties:
+                              accessKeyId:
+                                description: AccessKeyID references the access key
+                                  id.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              secretAccessKey:
+                                description: SecretAccessKey references the secret
+                                  access key.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                            required:
+                            - accessKeyId
+                            - secretAccessKey
+                            type: object
+                          serverName:
+                            description: |-
+                              ServerName is the origin cluster's folder name under destinationPath,
+                              usually "<old CR name>-db".
+                            maxLength: 255
+                            minLength: 1
+                            type: string
+                        required:
+                        - destinationPath
+                        - serverName
+                        type: object
+                      targetTime:
+                        description: |-
+                          TargetTime is an optional RFC3339 timestamp for point-in-time recovery.
+                          Omit to recover to the latest available WAL. CNPG picks the closest
+                          backup completed before the target.
+                        format: date-time
+                        type: string
+                    required:
+                    - source
+                    type: object
                   resources:
                     description: Resources for each CNPG instance.
                     properties:
@@ -1040,6 +1151,18 @@ spec:
                   rule: '!(has(self.external) && has(self.pooler))'
                 - message: backup requires managed PostgreSQL; remove postgres.external
                   rule: '!(has(self.external) && has(self.backup))'
+                - message: recovery requires managed PostgreSQL; remove postgres.external
+                  rule: '!(has(self.external) && has(self.recovery))'
+                - message: 'postgres.recovery is immutable: it declares the instance''s
+                    origin at creation and cannot be added, changed or removed afterwards'
+                  rule: has(oldSelf.recovery) == has(self.recovery) && (!has(self.recovery)
+                    || self.recovery == oldSelf.recovery)
+                - message: backup would overwrite the recovery source WAL archive;
+                    set postgres.backup.serverName different from recovery.source.serverName
+                    when sharing destinationPath
+                  rule: '!(has(self.backup) && has(self.recovery)) || self.backup.destinationPath
+                    != self.recovery.source.destinationPath || (has(self.backup.serverName)
+                    && self.backup.serverName != self.recovery.source.serverName)'
               proxy:
                 description: Proxy configures the Caddy reverse proxy fronting the
                   app.

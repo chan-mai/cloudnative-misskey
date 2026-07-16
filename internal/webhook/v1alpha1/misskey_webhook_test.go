@@ -73,6 +73,15 @@ func TestAdvisoryWarnings(t *testing.T) {
 	if len(warns) == 0 || !strings.Contains(strings.Join(warns, " "), "readOffload") {
 		t.Errorf("expected readOffload advisory warning, got %v", warns)
 	}
+	// recovery → 復元元との整合(url/idGenerationMethod/imageName)注意の警告
+	m2 := base()
+	m2.Spec.Postgres.Recovery = &misskeyv1alpha1.PostgresRecovery{Source: misskeyv1alpha1.RecoverySource{
+		DestinationPath: "s3://bk/misskey", ServerName: "old-db",
+	}}
+	warns = advisoryWarnings(m2)
+	if len(warns) == 0 || !strings.Contains(strings.Join(warns, " "), "recovery") {
+		t.Errorf("expected recovery advisory warning, got %v", warns)
+	}
 	// 正常specは警告なし
 	if w := advisoryWarnings(base()); len(w) != 0 {
 		t.Errorf("clean spec must have no warnings: %v", w)
