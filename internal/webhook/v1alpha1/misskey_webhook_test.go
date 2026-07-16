@@ -87,3 +87,21 @@ func TestAdvisoryWarnings(t *testing.T) {
 		t.Errorf("clean spec must have no warnings: %v", w)
 	}
 }
+
+func TestExtraConfigWarnings(t *testing.T) {
+	if w := extraConfigWarnings(""); w != nil {
+		t.Errorf("empty extraConfig must not warn: %v", w)
+	}
+	if w := extraConfigWarnings("cacheServer:\n  host: redis2\n"); w != nil {
+		t.Errorf("non-reserved keys must not warn: %v", w)
+	}
+	// YAML破損
+	if w := extraConfigWarnings(": bad ["); len(w) != 1 || !strings.Contains(w[0], "not valid YAML") {
+		t.Errorf("broken YAML must warn: %v", w)
+	}
+	// 予約キー衝突(複数, ソート順)
+	w := extraConfigWarnings("redis:\n  host: x\ndb:\n  host: y\n")
+	if len(w) != 2 || !strings.Contains(w[0], `"db"`) || !strings.Contains(w[1], `"redis"`) {
+		t.Errorf("reserved key conflicts must warn sorted: %v", w)
+	}
+}

@@ -19,13 +19,32 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	"sigs.k8s.io/yaml"
 
 	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
 )
+
+// operatorがdefault.ymlへ出力するトップレベルキー(controller側renderDefaultYMLと同期)
+// extraConfigとの重複はjs-yamlのduplicated mapping keyエラーでMisskeyが起動しなくなる
+var reservedConfigKeys = map[string]bool{
+	"url": true, "port": true, "setupPassword": true,
+	"db": true, "dbReplications": true, "dbSlaves": true,
+	"redis": true, "redisForJobQueue": true, "redisForPubsub": true,
+	"redisForTimelines": true, "redisForReactions": true,
+	"fulltextSearch": true, "meilisearch": true,
+	"id": true, "proxyRemoteFiles": true, "signToActivityPubGet": true,
+	"deliverJobConcurrency": true, "inboxJobConcurrency": true,
+	"deliverJobPerSec": true, "inboxJobPerSec": true, "relationshipJobPerSec": true,
+	"deliverJobMaxAttempts": true, "inboxJobMaxAttempts": true,
+	"proxy": true, "proxySmtp": true, "proxyBypassHosts": true,
+	"maxFileSize": true, "mediaProxy": true,
+}
 
 // SetupMisskeyWebhookWithManager: Misskeyのdefaulter/validatorをmanagerへ登録
 //
@@ -100,6 +119,30 @@ func advisoryWarnings(m *misskeyv1alpha1.Misskey) admission.Warnings {
 		if os.SetPublicRead != nil && *os.SetPublicRead && strings.Contains(os.Endpoint, "r2.cloudflarestorage.com") {
 			warns = append(warns, "spec.objectStorage.setPublicRead must be false for Cloudflare R2 (it does not support object ACLs)")
 		}
+	}
+	warns = append(warns, extraConfigWarnings(m.Spec.ExtraConfig)...)
+	return warns
+}
+
+// extraConfigWarnings: extraConfigのYAML破損とoperator管理キーとの重複を警告
+func extraConfigWarnings(extra string) admission.Warnings {
+	if strings.TrimSpace(extra) == "" {
+		return nil
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(extra), &parsed); err != nil {
+		return admission.Warnings{"spec.extraConfig is not valid YAML and will break Misskey's config parse"}
+	}
+	var conflicts []string
+	for k := range parsed {
+		if reservedConfigKeys[k] {
+			conflicts = append(conflicts, k)
+		}
+	}
+	sort.Strings(conflicts)
+	var warns admission.Warnings
+	for _, k := range conflicts {
+		warns = append(warns, fmt.Sprintf("spec.extraConfig key %q duplicates an operator-managed key; duplicate top-level keys break Misskey's YAML parse", k))
 	}
 	return warns
 }
