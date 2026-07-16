@@ -29,14 +29,21 @@ kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=1
 
 echo ">>> operator ${IMG}"
 docker build -t "$IMG" .
-$KIND load docker-image "$IMG" --name "$CLUSTER"
-(cd config/manager && ../../$KUSTOMIZE edit set image "controller=$IMG")
+# 内容ハッシュでタグを決定し、コード変更時のみ自動ロール
+SRC_HASH=$(find cmd api internal go.mod go.sum Dockerfile -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-12)
+ROLLOUT_IMG="${IMG}-${SRC_HASH}"
+docker tag "$IMG" "$ROLLOUT_IMG"
+$KIND load docker-image "$ROLLOUT_IMG" --name "$CLUSTER"
+(cd config/manager && ../../$KUSTOMIZE edit set image "controller=$ROLLOUT_IMG")
 $KUSTOMIZE build config/default-webhook | kubectl apply --server-side -f -
 git checkout -- config/manager/kustomization.yaml
 kubectl -n cloudnative-misskey-system rollout status deploy/controller-manager --timeout=300s
+# ロール完了後、参照されなくなった旧タグをnodeから掃除(内容アドレスタグの堆積防止)
+docker exec "${CLUSTER}-control-plane" crictl rmi --prune >/dev/null 2>&1 || true
 
 echo ">>> e2e tests"
-go test -tags e2e ./test/e2e/ -v -timeout 25m
+# -count=1: 実クラスタ相手のためgo testの結果キャッシュを無効化
+go test -tags e2e -count=1 ./test/e2e/ -v -timeout 25m
 
 if [ "${E2E_TEARDOWN:-0}" = "1" ]; then
   $KIND delete cluster --name "$CLUSTER"
