@@ -15,7 +15,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-package v1alpha1
+package v1beta1
 
 import (
 	"context"
@@ -24,17 +24,17 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // immutable(url/id/tenant)やcross-field整合(external xor managed、min<=max等)は
 // CRDのCEL(XValidation)が常時強制するため、ここではwebhook固有の
 // defaulter/警告のみをテストする。CELルールはintegration_test.go(envtest)が検証する。
 
-func base() *misskeyv1alpha1.Misskey {
-	return &misskeyv1alpha1.Misskey{
+func base() *misskeyv1beta1.Misskey {
+	return &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "ex", Namespace: "ns"},
-		Spec:       misskeyv1alpha1.MisskeySpec{URL: "https://m.example.com/", Image: "misskey/misskey:x"},
+		Spec:       misskeyv1beta1.MisskeySpec{URL: "https://m.example.com/", Image: "misskey/misskey:x"},
 	}
 }
 
@@ -67,7 +67,7 @@ func TestAdvisoryWarnings(t *testing.T) {
 	// external DB + readOffload → 効かない旨の警告(エラーではない)
 	m := base()
 	on := true
-	m.Spec.Postgres.External = &misskeyv1alpha1.ExternalPostgres{Host: "h", Database: "d", User: "u"}
+	m.Spec.Postgres.External = &misskeyv1beta1.ExternalPostgres{Host: "h", Database: "d", User: "u"}
 	m.Spec.Postgres.ReadOffload = &on
 	warns := advisoryWarnings(m)
 	if len(warns) == 0 || !strings.Contains(strings.Join(warns, " "), "readOffload") {
@@ -75,7 +75,7 @@ func TestAdvisoryWarnings(t *testing.T) {
 	}
 	// recovery → 復元元との整合(url/idGenerationMethod/imageName)注意の警告
 	m2 := base()
-	m2.Spec.Postgres.Recovery = &misskeyv1alpha1.PostgresRecovery{Source: misskeyv1alpha1.RecoverySource{
+	m2.Spec.Postgres.Recovery = &misskeyv1beta1.PostgresRecovery{Source: misskeyv1beta1.RecoverySource{
 		DestinationPath: "s3://bk/misskey", ServerName: "old-db",
 	}}
 	warns = advisoryWarnings(m2)
@@ -84,9 +84,9 @@ func TestAdvisoryWarnings(t *testing.T) {
 	}
 	// rps + monitoring無効 → 警告
 	m3 := base()
-	m3.Spec.App.Autoscaling = &misskeyv1alpha1.AutoscalingSpec{
-		MaxReplicas: 3,
-		RPS:         &misskeyv1alpha1.RPSTrigger{ServerAddress: "http://prom:9090", TargetRPS: 50},
+	m3.Spec.App.Autoscaling = &misskeyv1beta1.AppAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 3},
+		RPS:             &misskeyv1beta1.RPSTrigger{ServerAddress: "http://prom:9090", TargetRPS: 50},
 	}
 	warns = advisoryWarnings(m3)
 	if len(warns) == 0 || !strings.Contains(strings.Join(warns, " "), "monitoring.enabled") {

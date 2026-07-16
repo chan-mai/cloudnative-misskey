@@ -23,7 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // dbEndpoint: dbSlave1件分の接続先(pass は常に${DB_PASSWORD})
@@ -71,7 +71,7 @@ type plan struct {
 	redisRoles   map[string]redisEndpoint // 分離roleのみ(key=redisRoleDesc.key)
 
 	// MeiliSearch/検索
-	provider     misskeyv1alpha1.SearchProvider
+	provider     misskeyv1beta1.SearchProvider
 	meiliEnabled bool // provider == meilisearch
 	meiliManaged bool
 	meiliHost    string
@@ -110,7 +110,7 @@ type plan struct {
 }
 
 // specを既定値適用の上でplanに平坦化
-func resolve(m *misskeyv1alpha1.Misskey) plan {
+func resolve(m *misskeyv1beta1.Misskey) plan {
 	p := plan{}
 
 	// --- PostgreSQL ---
@@ -175,8 +175,8 @@ func resolve(m *misskeyv1alpha1.Misskey) plan {
 	}
 
 	// --- Search ---
-	p.provider = misskeyv1alpha1.SearchProvider(stringOr(string(m.Spec.Search.Provider), string(misskeyv1alpha1.SearchMeilisearch)))
-	if p.provider == misskeyv1alpha1.SearchMeilisearch {
+	p.provider = misskeyv1beta1.SearchProvider(stringOr(string(m.Spec.Search.Provider), string(misskeyv1beta1.SearchMeilisearch)))
+	if p.provider == misskeyv1beta1.SearchMeilisearch {
 		p.meiliEnabled = true
 		ms := m.Spec.Search.Meilisearch
 		p.meiliIndex = stringOr(ms.Index, sanitizeIndex(hostFromURL(m.Spec.URL)))
@@ -263,7 +263,7 @@ var objectStorageColumnDefaults = map[string]string{
 }
 
 // objectStorageColumns: 既定カラム名にspec.columnNamesの上書きをマージ(fork/旧version対応)
-func objectStorageColumns(c *misskeyv1alpha1.ObjectStorageColumns) map[string]string {
+func objectStorageColumns(c *misskeyv1beta1.ObjectStorageColumns) map[string]string {
 	out := make(map[string]string, len(objectStorageColumnDefaults))
 	for k, v := range objectStorageColumnDefaults {
 		out[k] = v
@@ -294,7 +294,7 @@ func objectStorageColumns(c *misskeyv1alpha1.ObjectStorageColumns) map[string]st
 }
 
 // externalRedisEndpoint: ExternalRedisをendpointへ。Sentinels指定でSentinelモード
-func externalRedisEndpoint(ext *misskeyv1alpha1.ExternalRedis, passEnv string) redisEndpoint {
+func externalRedisEndpoint(ext *misskeyv1beta1.ExternalRedis, passEnv string) redisEndpoint {
 	ep := redisEndpoint{
 		host:    ext.Host,
 		port:    int32OrDefault(ext.Port, redisPort),
@@ -313,7 +313,7 @@ func externalRedisEndpoint(ext *misskeyv1alpha1.ExternalRedis, passEnv string) r
 
 // managedRedisEndpoint: operator管理redisのendpoint。HA有効でSentinelモード(sentinels+masterName)
 // standalone/HAともrequirepass認証あり(passSel=<name>-redis-auth)。NP+認証の多層防御
-func managedRedisEndpoint(m *misskeyv1alpha1.Misskey, suffix, passEnv string, ha *misskeyv1alpha1.RedisHA) redisEndpoint {
+func managedRedisEndpoint(m *misskeyv1beta1.Misskey, suffix, passEnv string, ha *misskeyv1beta1.RedisHA) redisEndpoint {
 	authSel := redisAuthSecretKeySelector(m)
 	if ha != nil {
 		return redisEndpoint{

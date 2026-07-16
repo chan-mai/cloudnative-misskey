@@ -28,12 +28,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // コンポーネントのPodDisruptionBudgetを保証し、ノードdrainで全レプリカが一度に落ちないようにする
 // zero-downtimeロールアウト戦略が暗に前提とするが保証しない点を担保。maxUnavailable=1なら単一レプリカのコンポーネントもdrain可能
-func (r *MisskeyReconciler) reconcilePDB(ctx context.Context, m *misskeyv1alpha1.Misskey, component string) error {
+func (r *MisskeyReconciler) reconcilePDB(ctx context.Context, m *misskeyv1beta1.Misskey, component string) error {
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-" + component, Namespace: m.Namespace}}
 	return r.apply(ctx, m, pdb, func() error {
 		pdb.Labels = labelsFor(m, component)
@@ -60,7 +60,7 @@ func ptrIntStr(v intstr.IntOrString) *intstr.IntOrString { return &v }
 // CreateOrUpdate用にDeploymentのフィールドを冪等に埋める
 // annotation(例: configチェックサム)はpodテンプレートにマージし、他ツールが付与したテンプレートannotationを潰さずconfig変更でローリング更新を起こす
 // replicasがnilの時はReplicasを触らない(autoscaling有効時、HPA/KEDA管理値を保持)
-func setDeployment(dep *appsv1.Deployment, m *misskeyv1alpha1.Misskey, component string, replicas *int32, pod corev1.PodSpec, annotations map[string]string) {
+func setDeployment(dep *appsv1.Deployment, m *misskeyv1beta1.Misskey, component string, replicas *int32, pod corev1.PodSpec, annotations map[string]string) {
 	dep.Labels = labelsFor(m, component)
 	if replicas != nil {
 		dep.Spec.Replicas = replicas
@@ -78,7 +78,7 @@ func setDeployment(dep *appsv1.Deployment, m *misskeyv1alpha1.Misskey, component
 }
 
 // app Service(常時)。app Deployment未作成でもproxyのtarget先になる
-func (r *MisskeyReconciler) reconcileAppService(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileAppService(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameApp(m), Namespace: m.Namespace}}
 	return r.apply(ctx, m, svc, func() error {
 		svc.Labels = labelsFor(m, roleApp)
@@ -93,11 +93,12 @@ func (r *MisskeyReconciler) reconcileAppService(ctx context.Context, m *misskeyv
 }
 
 // app Deployment+PDB+autoscaler。MigrationComplete後にのみ呼ぶ
-func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) error {
+	sc := appScaleConfig(m.Spec.App.Autoscaling)
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameApp(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
-		pod := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)
-		setDeployment(dep, m, roleApp, resumeReplicas(m.Spec.App, dep), pod, r.misskeyChecksum(ctx, m, p))
+		pod := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App.ComponentSpec)
+		setDeployment(dep, m, roleApp, resumeReplicas(m.Spec.App.ComponentSpec, sc, dep), pod, r.misskeyChecksum(ctx, m, p))
 		return nil
 	}); err != nil {
 		return err
@@ -105,15 +106,16 @@ func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1alpha1
 	if err := r.reconcilePDB(ctx, m, roleApp); err != nil {
 		return err
 	}
-	return r.reconcileAutoscaler(ctx, m, roleApp, nameApp(m), m.Spec.App.Autoscaling, p)
+	return r.reconcileAutoscaler(ctx, m, roleApp, nameApp(m), sc, p)
 }
 
 // workerのDeployment+PDB+autoscaler
-func (r *MisskeyReconciler) reconcileWorker(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+func (r *MisskeyReconciler) reconcileWorker(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) error {
+	sc := workerScaleConfig(m.Spec.Worker.Autoscaling)
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameWorker(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
-		pod := buildMisskeyPodSpec(m, p, roleWorker, m.Spec.Worker)
-		setDeployment(dep, m, roleWorker, resumeReplicas(m.Spec.Worker, dep), pod, r.misskeyChecksum(ctx, m, p))
+		pod := buildMisskeyPodSpec(m, p, roleWorker, m.Spec.Worker.ComponentSpec)
+		setDeployment(dep, m, roleWorker, resumeReplicas(m.Spec.Worker.ComponentSpec, sc, dep), pod, r.misskeyChecksum(ctx, m, p))
 		return nil
 	}); err != nil {
 		return err
@@ -121,12 +123,12 @@ func (r *MisskeyReconciler) reconcileWorker(ctx context.Context, m *misskeyv1alp
 	if err := r.reconcilePDB(ctx, m, roleWorker); err != nil {
 		return err
 	}
-	return r.reconcileAutoscaler(ctx, m, roleWorker, nameWorker(m), m.Spec.Worker.Autoscaling, p)
+	return r.reconcileAutoscaler(ctx, m, roleWorker, nameWorker(m), sc, p)
 }
 
 // staticReplicas: autoscaling有効ならnil(autoscalerがreplicas管理)、無効ならreplicasOr
-func staticReplicas(comp misskeyv1alpha1.ComponentSpec) *int32 {
-	if autoscalingEnabled(comp.Autoscaling) {
+func staticReplicas(comp misskeyv1beta1.ComponentSpec, a *scaleConfig) *int32 {
+	if autoscalingEnabled(a) {
 		return nil
 	}
 	return replicasOr(comp.Replicas, 1)
@@ -135,19 +137,19 @@ func staticReplicas(comp misskeyv1alpha1.ComponentSpec) *int32 {
 // resumeReplicas: apply mutate内でのreplicas決定
 // autoscaling有効かつ既存Deploymentがreplicas=0(suspend解除直後)ならminReplicasで再点火
 // HPAはspec.replicas=0のtargetをautoscaling無効として無視するため、kickなしではスタックする
-func resumeReplicas(comp misskeyv1alpha1.ComponentSpec, dep *appsv1.Deployment) *int32 {
-	if replicas := staticReplicas(comp); replicas != nil {
+func resumeReplicas(comp misskeyv1beta1.ComponentSpec, a *scaleConfig, dep *appsv1.Deployment) *int32 {
+	if replicas := staticReplicas(comp, a); replicas != nil {
 		return replicas
 	}
 	if dep.ResourceVersion == "" || dep.Spec.Replicas == nil || *dep.Spec.Replicas != 0 {
 		return nil
 	}
-	return replicasOr(comp.Autoscaling.MinReplicas, 1)
+	return replicasOr(a.MinReplicas, 1)
 }
 
 // suspendWorkloads: app/workerをreplicas 0に落としautoscalerを削除
 // Deployment不在時は何も作らない(初回install前のsuspendはworkload未生成のまま)
-func (r *MisskeyReconciler) suspendWorkloads(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) suspendWorkloads(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	for _, name := range []string{nameApp(m), nameWorker(m)} {
 		if err := r.deleteHPA(ctx, m, name); err != nil {
 			return err
@@ -176,7 +178,7 @@ func (r *MisskeyReconciler) suspendWorkloads(ctx context.Context, m *misskeyv1al
 // misskeyChecksum: app/worker podテンプレートのchecksum annotation
 // config本文+参照SecretのresourceVersion。objectStorage(autoConfigure時)も含め、
 // meta直書きはpub/sub非発火のため設定/カラム/資格情報変更でpodをrollし古いmeta cacheを畳む
-func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) map[string]string {
+func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) map[string]string {
 	parts := append([]string{renderDefaultYML(m, p)}, r.referencedSecretVersions(ctx, m, p)...)
 	if p.objAutoConfigure {
 		if assigns, err := objectStorageAssignments(p); err == nil {

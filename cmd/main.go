@@ -33,9 +33,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 	"github.com/chan-mai/cloudnative-misskey/internal/controller"
-	webhookv1alpha1 "github.com/chan-mai/cloudnative-misskey/internal/webhook/v1alpha1"
+	webhookv1beta1 "github.com/chan-mai/cloudnative-misskey/internal/webhook/v1beta1"
 )
 
 var (
@@ -45,7 +45,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(misskeyv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(misskeyv1beta1.AddToScheme(scheme))
 }
 
 func main() {
@@ -122,7 +122,7 @@ func main() {
 
 	// webhookはcert必須のためlocal実行等ではENABLE_WEBHOOKS=falseで無効化
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupMisskeyWebhookWithManager(mgr); err != nil {
+		if err := webhookv1beta1.SetupMisskeyWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Misskey")
 			os.Exit(1)
 		}

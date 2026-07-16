@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 const (
@@ -38,7 +38,7 @@ const (
 )
 
 // reconcileTenancy: instance隔離(ingress/egress)と、専用namespace前提のResourceQuota/LimitRange
-func (r *MisskeyReconciler) reconcileTenancy(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileTenancy(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	if err := r.reconcileNetworkIsolation(ctx, m); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func (r *MisskeyReconciler) reconcileTenancy(ctx context.Context, m *misskeyv1al
 // reconcileNetworkIsolation: backend podへのingressをintra-instanceに限る
 // 公開入口(proxy有効時proxy、無効時app)は開放し、ingress controllerから到達可能に保つ
 // postgresはCNPG operatorのcross-namespaceアクセス(instance manager :8000)が要るため除外
-func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-isolation", Namespace: m.Namespace}}
 	if !boolOr(m.Spec.Network.Isolation.Enabled, true) {
 		return r.deleteIfExists(ctx, np)
@@ -90,7 +90,7 @@ func (r *MisskeyReconciler) reconcileNetworkIsolation(ctx context.Context, m *mi
 
 // reconcileEgressIsolation: opt-in。app/worker=DNS+intra+public(private/metadata除く)、
 // その他backend=DNS+intraのみ。postgresは除外(CNPGのbackup/replicationのため)
-func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	frontend := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-egress-frontend", Namespace: m.Namespace}}
 	backend := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-egress-backend", Namespace: m.Namespace}}
 	if !boolOr(m.Spec.Network.EgressIsolation.Enabled, false) {
@@ -144,7 +144,7 @@ func (r *MisskeyReconciler) reconcileEgressIsolation(ctx context.Context, m *mis
 }
 
 // egressCommonRules: DNS(:53) + intra-instance + 明示allowNamespace。全componentで共通
-func egressCommonRules(m *misskeyv1alpha1.Misskey) []networkingv1.NetworkPolicyEgressRule {
+func egressCommonRules(m *misskeyv1beta1.Misskey) []networkingv1.NetworkPolicyEgressRule {
 	udp, tcp := corev1.ProtocolUDP, corev1.ProtocolTCP
 	dnsPort := intstr.FromInt32(53)
 	dnsNs := stringOr(m.Spec.Network.EgressIsolation.DNSNamespace, "kube-system")
@@ -166,7 +166,7 @@ func egressCommonRules(m *misskeyv1alpha1.Misskey) []networkingv1.NetworkPolicyE
 // dbEgressRule: CNPGクラスタ配下のpod(db instance + pooler)宛egressを許可
 // pooler podはCNPGがapp.kubernetes.io/instanceを上書きするためinstanceLabelでは拾えず、
 // CNPG固有のcnpg.io/clusterで選択する。managed DB専用(externalはnameDBのクラスタ不在でno-op)
-func dbEgressRule(m *misskeyv1alpha1.Misskey) networkingv1.NetworkPolicyEgressRule {
+func dbEgressRule(m *misskeyv1beta1.Misskey) networkingv1.NetworkPolicyEgressRule {
 	return networkingv1.NetworkPolicyEgressRule{
 		To: []networkingv1.NetworkPolicyPeer{{
 			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"cnpg.io/cluster": nameDB(m)}},
@@ -176,7 +176,7 @@ func dbEgressRule(m *misskeyv1alpha1.Misskey) networkingv1.NetworkPolicyEgressRu
 
 // redisHAPodApps: HA operator管理redis/sentinel podのapp label値一覧
 // RedisReplication pod=app:<CR名>、RedisSentinel pod=app:<CR名>-sentinel
-func redisHAPodApps(m *misskeyv1alpha1.Misskey) []string {
+func redisHAPodApps(m *misskeyv1beta1.Misskey) []string {
 	var apps []string
 	for _, inst := range managedRedisInstances(m) {
 		if inst.ha {
@@ -188,7 +188,7 @@ func redisHAPodApps(m *misskeyv1alpha1.Misskey) []string {
 
 // redisEgressRule: HA operator管理pod宛egressを許可(app.kubernetes.io/instanceを持たないため)
 // HAインスタンスが無ければnil
-func redisEgressRule(m *misskeyv1alpha1.Misskey) *networkingv1.NetworkPolicyEgressRule {
+func redisEgressRule(m *misskeyv1beta1.Misskey) *networkingv1.NetworkPolicyEgressRule {
 	apps := redisHAPodApps(m)
 	if len(apps) == 0 {
 		return nil
@@ -218,7 +218,7 @@ func publicEgressRule() networkingv1.NetworkPolicyEgressRule {
 }
 
 // reconcileResourceQuota: dedicated時のみnamespace-wideなResourceQuotaを生成
-func (r *MisskeyReconciler) reconcileResourceQuota(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileResourceQuota(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	rq := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-quota", Namespace: m.Namespace}}
 	if !m.Spec.Tenancy.Dedicated || len(m.Spec.Tenancy.Quota) == 0 {
 		return r.deleteIfExists(ctx, rq)
@@ -231,7 +231,7 @@ func (r *MisskeyReconciler) reconcileResourceQuota(ctx context.Context, m *missk
 }
 
 // reconcileLimitRange: dedicated時のみContainer既定/上限のLimitRangeを生成
-func (r *MisskeyReconciler) reconcileLimitRange(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileLimitRange(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	lr := &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: m.Name + "-limits", Namespace: m.Namespace}}
 	spec := m.Spec.Tenancy.LimitRange
 	if !m.Spec.Tenancy.Dedicated || spec == nil {

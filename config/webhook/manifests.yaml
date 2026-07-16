@@ -10,14 +10,14 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-cloudnative-misskey-dev-v1alpha1-misskey
+      path: /mutate-cloudnative-misskey-dev-v1beta1-misskey
   failurePolicy: Fail
-  name: mmisskey-v1alpha1.kb.io
+  name: mmisskey-v1beta1.kb.io
   rules:
   - apiGroups:
     - cloudnative-misskey.dev
     apiVersions:
-    - v1alpha1
+    - v1beta1
     operations:
     - CREATE
     - UPDATE
@@ -36,14 +36,14 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-cloudnative-misskey-dev-v1alpha1-misskey
+      path: /validate-cloudnative-misskey-dev-v1beta1-misskey
   failurePolicy: Fail
-  name: vmisskey-v1alpha1.kb.io
+  name: vmisskey-v1beta1.kb.io
   rules:
   - apiGroups:
     - cloudnative-misskey.dev
     apiVersions:
-    - v1alpha1
+    - v1beta1
     operations:
     - CREATE
     - UPDATE

@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // 公式redisイメージが動作するuid(standalone)
@@ -74,7 +74,7 @@ func allRedisSuffixes() []string {
 }
 
 // managedRedisInstances: spec.redisから望ましいmanagedインスタンスを導出(external roleは除外)
-func managedRedisInstances(m *misskeyv1alpha1.Misskey) []redisManagedInstance {
+func managedRedisInstances(m *misskeyv1beta1.Misskey) []redisManagedInstance {
 	rs := m.Spec.Redis
 	var out []redisManagedInstance
 	if rs.External == nil {
@@ -94,7 +94,7 @@ func managedRedisInstances(m *misskeyv1alpha1.Misskey) []redisManagedInstance {
 }
 
 // buildManagedInstance: default設定 + role override + HA解決
-func buildManagedInstance(m *misskeyv1alpha1.Misskey, suffix string, role *misskeyv1alpha1.RedisRole, ha *misskeyv1alpha1.RedisHA) redisManagedInstance {
+func buildManagedInstance(m *misskeyv1beta1.Misskey, suffix string, role *misskeyv1beta1.RedisRole, ha *misskeyv1beta1.RedisHA) redisManagedInstance {
 	rs := m.Spec.Redis
 	inst := redisManagedInstance{
 		suffix:          suffix,
@@ -131,7 +131,7 @@ func buildManagedInstance(m *misskeyv1alpha1.Misskey, suffix string, role *missk
 
 // reconcileRedis: 望ましいmanagedインスタンス(default+managed roles)を各々standalone/HAで用意し、
 // 望ましくなくなった(external化/role削除/mode切替)インスタンスを掃除
-func (r *MisskeyReconciler) reconcileRedis(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileRedis(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	desired := managedRedisInstances(m)
 	// managedが1つでもあればrequirepass用のauth secretを用意(standalone/HA共通, CR/pod参照前に存在させる)
 	if len(desired) > 0 {
@@ -190,7 +190,7 @@ func (r *MisskeyReconciler) reconcileRedis(ctx context.Context, m *misskeyv1alph
 // app/worker + intra-HA + allowedNamespaces(redis-operator/keda)のみ許可
 // HA podはinstance labelを持たずnetwork.isolationのNPに乗らないため、その穴を埋める専用NP
 // network.isolation.enabledでgate(network.isolationの一部として機能)。requirepassと併せた多層防御
-func (r *MisskeyReconciler) reconcileRedisHANetworkPolicy(ctx context.Context, m *misskeyv1alpha1.Misskey, inst redisManagedInstance) error {
+func (r *MisskeyReconciler) reconcileRedisHANetworkPolicy(ctx context.Context, m *misskeyv1beta1.Misskey, inst redisManagedInstance) error {
 	name := nameRedisInstance(m, inst.suffix) + "-ha"
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.Namespace}}
 	if !boolOr(m.Spec.Network.Isolation.Enabled, true) {
@@ -228,13 +228,13 @@ func (r *MisskeyReconciler) reconcileRedisHANetworkPolicy(ctx context.Context, m
 }
 
 // deleteRedisHANetworkPolicy: 指定suffixのHA redis NPを掃除
-func (r *MisskeyReconciler) deleteRedisHANetworkPolicy(ctx context.Context, m *misskeyv1alpha1.Misskey, suffix string) error {
+func (r *MisskeyReconciler) deleteRedisHANetworkPolicy(ctx context.Context, m *misskeyv1beta1.Misskey, suffix string) error {
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: nameRedisInstance(m, suffix) + "-ha", Namespace: m.Namespace}}
 	return r.deleteIfExists(ctx, np)
 }
 
 // reconcileRedisStandalone: 単一pod Redis(Service+StatefulSet+任意NetworkPolicy)
-func (r *MisskeyReconciler) reconcileRedisStandalone(ctx context.Context, m *misskeyv1alpha1.Misskey, inst redisManagedInstance) error {
+func (r *MisskeyReconciler) reconcileRedisStandalone(ctx context.Context, m *misskeyv1beta1.Misskey, inst redisManagedInstance) error {
 	name := nameRedisInstance(m, inst.suffix)
 	comp := redisComponent(inst.suffix)
 
@@ -320,7 +320,7 @@ func (r *MisskeyReconciler) reconcileRedisStandalone(ctx context.Context, m *mis
 }
 
 // deleteRedisStandalone: 指定suffixのstandalone資源(STS/Service/NetworkPolicy)を掃除
-func (r *MisskeyReconciler) deleteRedisStandalone(ctx context.Context, m *misskeyv1alpha1.Misskey, suffix string) error {
+func (r *MisskeyReconciler) deleteRedisStandalone(ctx context.Context, m *misskeyv1beta1.Misskey, suffix string) error {
 	name := nameRedisInstance(m, suffix)
 	ns := m.Namespace
 	objs := []client.Object{

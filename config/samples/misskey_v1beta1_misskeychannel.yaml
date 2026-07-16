@@ -1,5 +1,5 @@
 # fleet imageチャンネル。spec.imageFrom.channelで参照するMisskeyへ段階配信する
-apiVersion: cloudnative-misskey.dev/v1alpha1
+apiVersion: cloudnative-misskey.dev/v1beta1
 kind: MisskeyChannel
 metadata:
   name: stable

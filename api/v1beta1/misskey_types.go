@@ -15,7 +15,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-package v1alpha1
+package v1beta1
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -98,11 +98,11 @@ type MisskeySpec struct {
 
 	// App configures the web/API server Deployment (runs with MK_ONLY_SERVER).
 	// +optional
-	App ComponentSpec `json:"app,omitempty"`
+	App AppSpec `json:"app,omitempty"`
 
 	// Worker configures the job queue Deployment (runs with MK_ONLY_QUEUE).
 	// +optional
-	Worker ComponentSpec `json:"worker,omitempty"`
+	Worker WorkerSpec `json:"worker,omitempty"`
 
 	// Proxy configures the Caddy reverse proxy fronting the app.
 	// +optional
@@ -277,7 +277,8 @@ type MonitoringSpec struct {
 	Interval string `json:"interval,omitempty"`
 
 	// RedisExporterImage is the redis_exporter sidecar image for standalone Redis.
-	// +kubebuilder:default="oliver006/redis_exporter:v1.62.0-alpine"
+	// Defaults on the operator side (not persisted into the CR), so operator
+	// upgrades can evolve it fleet-wide.
 	// +optional
 	RedisExporterImage string `json:"redisExporterImage,omitempty"`
 
@@ -456,7 +457,7 @@ type SetupPasswordSpec struct {
 	SecretRef *corev1.SecretKeySelector `json:"secretRef,omitempty"`
 }
 
-// ComponentSpec is the shared shape of the app and worker Deployments.
+// ComponentSpec is the shared Deployment shape of the app and worker.
 type ComponentSpec struct {
 	// Replicas is the desired number of pods.
 	// +kubebuilder:validation:Minimum=0
@@ -474,19 +475,33 @@ type ComponentSpec struct {
 	// Tolerations allow scheduling onto tainted nodes.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
-
-	// Autoscaling replaces the static Replicas with a HorizontalPodAutoscaler
-	// (CPU/memory) or, when queues are set, a KEDA ScaledObject (BullMQ queue
-	// depth). HPA needs metrics-server; queue scaling needs KEDA installed.
-	// +optional
-	Autoscaling *AutoscalingSpec `json:"autoscaling,omitempty"`
 }
 
-// AutoscalingSpec configures autoscaling for an app/worker Deployment. Presence
-// of the block enables autoscaling; omit it for static replicas. When Queues is
-// empty a native HPA is created (CPU/memory); when Queues is set a KEDA
-// ScaledObject is created that scales on BullMQ wait-list depth.
-// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must not exceed maxReplicas"
+// AppSpec configures the web/API server Deployment.
+type AppSpec struct {
+	ComponentSpec `json:",inline"`
+
+	// Autoscaling replaces the static Replicas with a HorizontalPodAutoscaler
+	// (CPU/memory, needs metrics-server) or, when rps is set, a KEDA
+	// ScaledObject on the proxy's request rate.
+	// +optional
+	Autoscaling *AppAutoscalingSpec `json:"autoscaling,omitempty"`
+}
+
+// WorkerSpec configures the job queue Deployment.
+type WorkerSpec struct {
+	ComponentSpec `json:",inline"`
+
+	// Autoscaling replaces the static Replicas with a HorizontalPodAutoscaler
+	// (CPU/memory, needs metrics-server) or, when queues is set, a KEDA
+	// ScaledObject on BullMQ queue depth.
+	// +optional
+	Autoscaling *WorkerAutoscalingSpec `json:"autoscaling,omitempty"`
+}
+
+// AutoscalingSpec is the replica range and resource metrics shared by the app
+// and worker autoscaling blocks. Presence of a component's autoscaling block
+// enables autoscaling; omit it for static replicas.
 type AutoscalingSpec struct {
 	// MinReplicas is the lower bound. Default 1; use >=2 so the PodDisruptionBudget
 	// (maxUnavailable=1) still allows node drains.
@@ -505,19 +520,35 @@ type AutoscalingSpec struct {
 	// TargetMemoryUtilizationPercentage adds a memory utilization metric. Unset omits it.
 	// +optional
 	TargetMemoryUtilizationPercentage *int32 `json:"targetMemoryUtilizationPercentage,omitempty"`
+}
 
-	// Queues, when set, switches the mechanism to a KEDA ScaledObject that scales on
-	// BullMQ queue wait-list depth. Requires KEDA in the cluster. Meaningful for the
-	// worker; typically deliver and inbox.
-	// +optional
-	Queues []QueueScaleTrigger `json:"queues,omitempty"`
+// AppAutoscalingSpec autoscales the app Deployment. When RPS is unset a native
+// HPA is created (CPU/memory); when RPS is set a KEDA ScaledObject scales on
+// the proxy's request rate.
+// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must not exceed maxReplicas"
+type AppAutoscalingSpec struct {
+	AutoscalingSpec `json:",inline"`
 
 	// RPS, when set, switches the mechanism to a KEDA ScaledObject that scales
-	// on the proxy's request rate via a prometheus trigger. Intended for the
-	// app component; requires KEDA and monitoring.enabled (or an equivalent
-	// scrape) so the Caddy metrics are collected.
+	// on the proxy's request rate via a prometheus trigger. Requires KEDA and
+	// monitoring.enabled (or an equivalent scrape) so the Caddy metrics are
+	// collected.
 	// +optional
 	RPS *RPSTrigger `json:"rps,omitempty"`
+}
+
+// WorkerAutoscalingSpec autoscales the worker Deployment. When Queues is empty
+// a native HPA is created (CPU/memory); when Queues is set a KEDA ScaledObject
+// scales on BullMQ wait-list depth.
+// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must not exceed maxReplicas"
+type WorkerAutoscalingSpec struct {
+	AutoscalingSpec `json:",inline"`
+
+	// Queues, when set, switches the mechanism to a KEDA ScaledObject that scales on
+	// BullMQ queue wait-list depth. Requires KEDA in the cluster. Typically deliver
+	// and inbox.
+	// +optional
+	Queues []QueueScaleTrigger `json:"queues,omitempty"`
 }
 
 // RPSTrigger scales on the proxy's request rate from Prometheus.
@@ -565,8 +596,9 @@ type ProxySpec struct {
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
-	// Image for the Caddy proxy container.
-	// +kubebuilder:default="caddy:2"
+	// Image for the Caddy proxy container. Defaults to caddy:2 on the operator
+	// side (not persisted into the CR), so operator upgrades can evolve it
+	// fleet-wide.
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -685,6 +717,7 @@ type RedisSpec struct {
 	// MaxMemoryPolicy sets --maxmemory-policy. Default noeviction, because this
 	// Redis also backs the job queue (BullMQ) and an eviction policy such as
 	// allkeys-lru would silently drop queued/delayed jobs under memory pressure.
+	// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;volatile-random;volatile-ttl
 	// +kubebuilder:default=noeviction
 	// +optional
 	MaxMemoryPolicy string `json:"maxMemoryPolicy,omitempty"`
@@ -777,6 +810,7 @@ type RedisRole struct {
 	MaxMemory string `json:"maxMemory,omitempty"`
 
 	// MaxMemoryPolicy override for this role's managed instance.
+	// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;volatile-random;volatile-ttl
 	// +optional
 	MaxMemoryPolicy string `json:"maxMemoryPolicy,omitempty"`
 
@@ -945,10 +979,12 @@ type PostgresSpec struct {
 	// +optional
 	Instances int32 `json:"instances,omitempty"`
 
-	// ImageName overrides the CNPG PostgreSQL image.
+	// Image is the CNPG PostgreSQL image (CNPG imageName). The default is
+	// persisted at creation so the PostgreSQL major version stays pinned for
+	// the cluster's lifetime regardless of operator upgrades.
 	// +kubebuilder:default="ghcr.io/cloudnative-pg/postgresql:17"
 	// +optional
-	ImageName string `json:"imageName,omitempty"`
+	Image string `json:"image,omitempty"`
 
 	// Database is the DB name created by CNPG initdb.
 	// +kubebuilder:default="misskey"
@@ -1287,9 +1323,9 @@ type ObjectStorageSpec struct {
 	// +optional
 	ExtraColumns map[string]string `json:"extraColumns,omitempty"`
 
-	// Image is the psql-capable image for the meta-write Job. Defaults to the
-	// CNPG PostgreSQL image, which ships psql 16+ (required for \getenv).
-	// +kubebuilder:default="ghcr.io/cloudnative-pg/postgresql:17"
+	// Image is the psql-capable image for the meta-write Job. Defaults on the
+	// operator side to the CNPG PostgreSQL image, which ships psql 16+
+	// (required for \getenv).
 	// +optional
 	Image string `json:"image,omitempty"`
 }

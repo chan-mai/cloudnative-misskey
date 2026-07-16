@@ -27,12 +27,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // proxy Deploymentのpod specを生成
 // Caddyは非rootで動くため、バイナリを書込可能なemptyDirにコピーし/dataと/configもemptyDirにする
-func buildCaddyPodSpec(m *misskeyv1alpha1.Misskey, withMaintenanceHTML bool) corev1.PodSpec {
+func buildCaddyPodSpec(m *misskeyv1beta1.Misskey, withMaintenanceHTML bool) corev1.PodSpec {
 	image := stringOr(m.Spec.Proxy.Image, "caddy:2")
 
 	volumes := []corev1.Volume{
@@ -102,7 +102,7 @@ func buildCaddyPodSpec(m *misskeyv1alpha1.Misskey, withMaintenanceHTML bool) cor
 
 // proxyのService+Deploymentを作成/更新。メンテページはproxy自身のfile_serverが配信
 // proxy/maintenance無効化時は該当リソースを掃除(reconcileRedis等のopt-outパターンと同じ)
-func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	// 統合前の<name>-maintenance Deployment/Serviceをアップグレード互換のため常に掃除
 	if err := r.deleteLegacyMaintenanceWorkload(ctx, m); err != nil {
 		return err
@@ -164,7 +164,7 @@ func (r *MisskeyReconciler) reconcileProxy(ctx context.Context, m *misskeyv1alph
 
 // deleteProxyResources: proxy無効化時のcleanup(Deployment/Service/PDB)
 // config CMのCaddyfileキーはreconcileConfigMapsが落とすため、Deploymentを残すとmount切れになる
-func (r *MisskeyReconciler) deleteProxyResources(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) deleteProxyResources(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	objs := []client.Object{
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameProxy(m), Namespace: m.Namespace}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameProxy(m), Namespace: m.Namespace}},
@@ -180,7 +180,7 @@ func (r *MisskeyReconciler) deleteProxyResources(ctx context.Context, m *misskey
 
 // deleteLegacyMaintenanceWorkload: 統合前構成のmaintenance Deployment/Serviceを掃除
 // CRのownerRefがありCR存続中はGCされないため明示削除(数リリース後に削除可)
-func (r *MisskeyReconciler) deleteLegacyMaintenanceWorkload(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) deleteLegacyMaintenanceWorkload(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	objs := []client.Object{
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameMaintenance(m), Namespace: m.Namespace}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameMaintenance(m), Namespace: m.Namespace}},
@@ -194,7 +194,7 @@ func (r *MisskeyReconciler) deleteLegacyMaintenanceWorkload(ctx context.Context,
 }
 
 // deleteMaintenanceHTMLConfigMap: maintenance/proxy無効化時のHTML ConfigMap掃除
-func (r *MisskeyReconciler) deleteMaintenanceHTMLConfigMap(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) deleteMaintenanceHTMLConfigMap(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: nameMaintenanceHTML(m), Namespace: m.Namespace}}
 	return r.deleteIfExists(ctx, cm)
 }

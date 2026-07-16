@@ -29,7 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // channelBucket: インスタンスを0-99の安定バケットへ写像(段階ロールアウトの割当)
@@ -42,7 +42,7 @@ func channelBucket(namespace, name string) uint32 {
 // channelImageFor: バケットと経過時間からこのインスタンスが従うimageを決定
 // statusのみを読む(channel controllerの観測とMisskey側の解決を一貫させる)
 // 変更直後に第1バッチが切替わり、interval毎にbatchPercentずつ広がる
-func channelImageFor(ch *misskeyv1alpha1.MisskeyChannel, bucket uint32, now time.Time) string {
+func channelImageFor(ch *misskeyv1beta1.MisskeyChannel, bucket uint32, now time.Time) string {
 	img := ch.Status.Image
 	if img == "" {
 		// channel controller未反映のbootstrap
@@ -72,9 +72,9 @@ func channelImageFor(ch *misskeyv1alpha1.MisskeyChannel, bucket uint32, now time
 // in-memory代入する。代入はこのreconcileの計算にのみ使い、絶対にpersistしない(specへの
 // Updateはfinalizer付与のみでresolveImageより前に完了している)
 // 以降のnameMigrate/podSpec/checksumは無変更で解決値を使う
-func (r *MisskeyReconciler) resolveImage(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) resolveImage(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	if m.Spec.ImageFrom != nil {
-		ch := &misskeyv1alpha1.MisskeyChannel{}
+		ch := &misskeyv1beta1.MisskeyChannel{}
 		if err := r.Get(ctx, types.NamespacedName{Name: m.Spec.ImageFrom.Channel}, ch); err != nil {
 			return fmt.Errorf("resolve imageFrom.channel %q: %w", m.Spec.ImageFrom.Channel, err)
 		}
@@ -105,7 +105,7 @@ func (r *MisskeyReconciler) resolveImage(ctx context.Context, m *misskeyv1alpha1
 }
 
 // pullSecretKeychain: imagePullSecretsからレジストリ認証keychainを構築(未指定はnil=anonymous)
-func (r *MisskeyReconciler) pullSecretKeychain(ctx context.Context, m *misskeyv1alpha1.Misskey) (authn.Keychain, error) {
+func (r *MisskeyReconciler) pullSecretKeychain(ctx context.Context, m *misskeyv1beta1.Misskey) (authn.Keychain, error) {
 	if len(m.Spec.ImagePullSecrets) == 0 {
 		return nil, nil
 	}

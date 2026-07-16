@@ -30,20 +30,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // migrationChecksum: migration Jobの入力checksum annotation
 // migrate config本文+concurrently flag+参照Secret版数。認証情報ローテで失敗Jobも作り直される
 // image変更はJob名(imageHash)で別Jobになるため含めない
-func (r *MisskeyReconciler) migrationChecksum(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) map[string]string {
+func (r *MisskeyReconciler) migrationChecksum(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) map[string]string {
 	parts := []string{renderDefaultYML(m, migratePlan(m, p)), strconv.FormatBool(migrationConcurrentIndexes(m))}
 	parts = append(parts, r.referencedSecretVersions(ctx, m, p)...)
 	return checksumAnnotation(parts...)
 }
 
 // buildMigrationJob: `pnpm run migrate`を1回だけ実行するJob。app/workerと同じinit/volumeを流用
-func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan, annotations map[string]string) *batchv1.Job {
+func buildMigrationJob(m *misskeyv1beta1.Misskey, p plan, annotations map[string]string) *batchv1.Job {
 	env := []corev1.EnvVar{{Name: "COREPACK_INTEGRITY_KEYS", Value: "0"}}
 	// index作成migrationを CREATE INDEX CONCURRENTLY にし、note等の巨大表への
 	// 書込ブロック(SHAREロック)を避ける。ormconfig.jsがmigrationsTransactionMode='each'へ切替
@@ -87,7 +87,7 @@ func buildMigrationJob(m *misskeyv1alpha1.Misskey, p plan, annotations map[strin
 
 // reconcileMigration: 現行imageのmigration Jobをcreate-if-absentで用意し、旧versionを掃除する
 // Jobはtemplate immutableなのでCreateOrUpdateは使わない。戻り値は完了(Succeeded>=1)か
-func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (bool, error) {
+func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (bool, error) {
 	if err := r.cleanupOldMigrationJobs(ctx, m); err != nil {
 		return false, err
 	}
@@ -126,12 +126,12 @@ func (r *MisskeyReconciler) reconcileMigration(ctx context.Context, m *misskeyv1
 }
 
 // preBackupEnabled: spec.migration.preBackupが有効か
-func preBackupEnabled(m *misskeyv1alpha1.Misskey) bool {
+func preBackupEnabled(m *misskeyv1beta1.Misskey) bool {
 	return m.Spec.Migration.PreBackup != nil && *m.Spec.Migration.PreBackup
 }
 
 // buildPreMigrationBackup: migration前のon-demand CNPG Backup
-func buildPreMigrationBackup(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
+func buildPreMigrationBackup(m *misskeyv1beta1.Misskey) *unstructured.Unstructured {
 	b := &unstructured.Unstructured{}
 	b.SetGroupVersionKind(cnpgBackupGVK)
 	b.SetName(namePreBackup(m))
@@ -145,7 +145,7 @@ func buildPreMigrationBackup(m *misskeyv1alpha1.Misskey) *unstructured.Unstructu
 
 // reconcilePreMigrationBackup: migration Job作成前にon-demandバックアップの完了をgateする
 // 失敗したmigrationをpostgres.recoveryで巻き戻せる状態を担保する。戻り値はgate通過可否
-func (r *MisskeyReconciler) reconcilePreMigrationBackup(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (bool, error) {
+func (r *MisskeyReconciler) reconcilePreMigrationBackup(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (bool, error) {
 	if !preBackupEnabled(m) || !p.dbManaged || m.Spec.Postgres.Backup == nil {
 		return true, nil
 	}
@@ -189,7 +189,7 @@ func (r *MisskeyReconciler) reconcilePreMigrationBackup(ctx context.Context, m *
 }
 
 // cleanupOldPreMigrationBackups: 現行image以外のpre-migration Backupを削除
-func (r *MisskeyReconciler) cleanupOldPreMigrationBackups(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) cleanupOldPreMigrationBackups(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	var list unstructured.UnstructuredList
 	list.SetGroupVersionKind(cnpgBackupListGVK)
 	if err := r.List(ctx, &list, client.InNamespace(m.Namespace), client.MatchingLabels(selectorFor(m, "premigrate"))); err != nil {
@@ -209,7 +209,7 @@ func (r *MisskeyReconciler) cleanupOldPreMigrationBackups(ctx context.Context, m
 }
 
 // cleanupOldMigrationJobs: 現行image以外のmigration Jobを削除(古いmigrationは適用済みで不要)
-func (r *MisskeyReconciler) cleanupOldMigrationJobs(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) cleanupOldMigrationJobs(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, client.InNamespace(m.Namespace), client.MatchingLabels(selectorFor(m, "migrate"))); err != nil {
 		return err

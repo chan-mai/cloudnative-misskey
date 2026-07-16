@@ -27,21 +27,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // redisAuthSecretRef: OT operator redisSecret/EnvVarSource用のsecret参照
-func redisAuthSecretRef(m *misskeyv1alpha1.Misskey) map[string]any {
+func redisAuthSecretRef(m *misskeyv1beta1.Misskey) map[string]any {
 	return map[string]any{"name": nameRedisAuthSecret(m), "key": "password"}
 }
 
 // redisAuthSecretKeySelector: requirepass secretのSecretKeySelector(env注入・config置換用)
-func redisAuthSecretKeySelector(m *misskeyv1alpha1.Misskey) corev1.SecretKeySelector {
+func redisAuthSecretKeySelector(m *misskeyv1beta1.Misskey) corev1.SecretKeySelector {
 	return corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: nameRedisAuthSecret(m)}, Key: "password"}
 }
 
 // reconcileRedisAuthSecret: managed redisのrequirepass用にrandom passwordのSecretを保証(冪等・生成後は不変)
-func (r *MisskeyReconciler) reconcileRedisAuthSecret(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileRedisAuthSecret(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: nameRedisAuthSecret(m), Namespace: m.Namespace}}
 	return r.apply(ctx, m, secret, func() error {
 		secret.Labels = labelsFor(m, "redis")
@@ -69,7 +69,7 @@ var (
 const opstreeRedisUID = 1000
 
 // reconcileRedisHA: 1インスタンス分のRedisReplication+RedisSentinelをSSA
-func (r *MisskeyReconciler) reconcileRedisHA(ctx context.Context, m *misskeyv1alpha1.Misskey, inst redisManagedInstance) error {
+func (r *MisskeyReconciler) reconcileRedisHA(ctx context.Context, m *misskeyv1beta1.Misskey, inst redisManagedInstance) error {
 	if err := r.applySSA(ctx, m, buildRedisReplication(m, inst)); err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func (r *MisskeyReconciler) reconcileRedisHA(ctx context.Context, m *misskeyv1al
 }
 
 // buildRedisReplication: primary+replicaのRedisReplication unstructured
-func buildRedisReplication(m *misskeyv1alpha1.Misskey, inst redisManagedInstance) *unstructured.Unstructured {
+func buildRedisReplication(m *misskeyv1beta1.Misskey, inst redisManagedInstance) *unstructured.Unstructured {
 	res, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(ptrResources(resourcesOr(inst.resources, "50m", "128Mi", "512Mi")))
 	spec := map[string]any{
 		"clusterSize": int64(inst.replicas),
@@ -109,7 +109,7 @@ func buildRedisReplication(m *misskeyv1alpha1.Misskey, inst redisManagedInstance
 }
 
 // buildRedisSentinel: RedisReplicationを監視するRedisSentinel unstructured
-func buildRedisSentinel(m *misskeyv1alpha1.Misskey, inst redisManagedInstance) *unstructured.Unstructured {
+func buildRedisSentinel(m *misskeyv1beta1.Misskey, inst redisManagedInstance) *unstructured.Unstructured {
 	res, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(ptrResources(resourcesOr(corev1.ResourceRequirements{}, "25m", "64Mi", "128Mi")))
 	quorum := strconv.Itoa(int(inst.sentinels)/2 + 1)
 	spec := map[string]any{
@@ -138,7 +138,7 @@ func buildRedisSentinel(m *misskeyv1alpha1.Misskey, inst redisManagedInstance) *
 // OT operatorはCRのlabelをpodへ継承するため、instance/component labelは付けない
 // (付けるとisolation NPがoperator管理podを選択しredis-operatorのcross-ns疎通を遮断する)
 // postgres(CNPG)を除外するのと同じ思想。app/worker→pod疎通はredisEgressRuleで許可
-func redisUnstructured(m *misskeyv1alpha1.Misskey, suffix string, gvk schema.GroupVersionKind, name string, spec map[string]any) *unstructured.Unstructured {
+func redisUnstructured(m *misskeyv1beta1.Misskey, suffix string, gvk schema.GroupVersionKind, name string, spec map[string]any) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
@@ -177,7 +177,7 @@ func redisPVCSpec(inst redisManagedInstance) map[string]any {
 func ptrResources(r corev1.ResourceRequirements) *corev1.ResourceRequirements { return &r }
 
 // deleteRedisHA: 指定suffixのRedisReplication/RedisSentinelを掃除。PVCは残す
-func (r *MisskeyReconciler) deleteRedisHA(ctx context.Context, m *misskeyv1alpha1.Misskey, suffix string) error {
+func (r *MisskeyReconciler) deleteRedisHA(ctx context.Context, m *misskeyv1beta1.Misskey, suffix string) error {
 	name := nameRedisHA(m, suffix)
 	for _, gvk := range []schema.GroupVersionKind{redisReplicationGVK, redisSentinelGVK} {
 		u := &unstructured.Unstructured{}

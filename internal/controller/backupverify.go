@@ -30,11 +30,11 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // backupVerifyDue: 次の復元検証が実行時期か
-func backupVerifyDue(m *misskeyv1alpha1.Misskey, interval time.Duration, now time.Time) bool {
+func backupVerifyDue(m *misskeyv1beta1.Misskey, interval time.Duration, now time.Time) bool {
 	v := m.Status.BackupVerification
 	if v == nil || v.LastVerifiedTime.IsZero() {
 		return true
@@ -44,7 +44,7 @@ func backupVerifyDue(m *misskeyv1alpha1.Misskey, interval time.Duration, now tim
 
 // buildDBVerifyCluster: 自前バックアップからbootstrap復元する使い捨てCNPG Cluster
 // backupセクションを持たない(WALアーカイブせず復元元アーカイブと衝突しない)
-func buildDBVerifyCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
+func buildDBVerifyCluster(m *misskeyv1beta1.Misskey) *unstructured.Unstructured {
 	pg := m.Spec.Postgres
 	b := pg.Backup
 	storageSize := quantityOr(pg.Storage, "20Gi")
@@ -68,7 +68,7 @@ func buildDBVerifyCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured
 
 	spec := map[string]any{
 		"instances": int64(1),
-		"imageName": stringOr(pg.ImageName, "ghcr.io/cloudnative-pg/postgresql:17"),
+		"imageName": stringOr(pg.Image, "ghcr.io/cloudnative-pg/postgresql:17"),
 		"inheritedMetadata": map[string]any{
 			"labels": inheritedLabels,
 		},
@@ -95,7 +95,7 @@ func buildDBVerifyCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured
 	return cluster
 }
 
-func verifyClusterRef(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
+func verifyClusterRef(m *misskeyv1beta1.Misskey) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(cnpgClusterGVK)
 	u.SetName(nameDBVerify(m))
@@ -105,7 +105,7 @@ func verifyClusterRef(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
 
 // reconcileBackupVerify: backup.verifyの周期で使い捨てClusterによる復元検証を回す
 // due→作成, ready→Succeeded記録+削除, timeout→Failed記録+削除。進行検知はdrift resyncで足りる
-func (r *MisskeyReconciler) reconcileBackupVerify(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileBackupVerify(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	b := m.Spec.Postgres.Backup
 	if b == nil || b.Verify == nil {
 		return r.deleteIfExists(ctx, verifyClusterRef(m))
@@ -160,13 +160,13 @@ func (r *MisskeyReconciler) reconcileBackupVerify(ctx context.Context, m *misske
 
 // recordBackupVerification: 検証結果のみをstatusへ反映
 // 単一status writer原則(updateStatus)の例外, 使い捨てCluster削除後は結果がここにしか残らないため完了時点で書く
-func (r *MisskeyReconciler) recordBackupVerification(ctx context.Context, m *misskeyv1alpha1.Misskey, result, message string, now time.Time) error {
+func (r *MisskeyReconciler) recordBackupVerification(ctx context.Context, m *misskeyv1beta1.Misskey, result, message string, now time.Time) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(m), cur); err != nil {
 			return err
 		}
-		cur.Status.BackupVerification = &misskeyv1alpha1.BackupVerificationStatus{
+		cur.Status.BackupVerification = &misskeyv1beta1.BackupVerificationStatus{
 			LastVerifiedTime: metav1.NewTime(now),
 			Result:           result,
 			Message:          message,

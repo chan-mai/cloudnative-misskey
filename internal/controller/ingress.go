@@ -24,13 +24,13 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // クラス固有の既定値とユーザのannotationをマージ(ユーザ優先)
 // nginxではproxy-body-sizeを引き上げる。既定1MBだとメディアアップロードが弾かれるため
 // issuerRef設定時はcert-managerのissuer annotationを注入
-func ingressAnnotations(m *misskeyv1alpha1.Misskey, className string) map[string]string {
+func ingressAnnotations(m *misskeyv1beta1.Misskey, className string) map[string]string {
 	out := map[string]string{}
 	if strings.Contains(className, "nginx") {
 		out["nginx.ingress.kubernetes.io/proxy-body-size"] = "0"
@@ -53,7 +53,7 @@ func ingressAnnotations(m *misskeyv1alpha1.Misskey, className string) map[string
 
 // 公開ホストをproxy(プロキシ無効時はapp直)へルーティングするIngressを作成/更新
 // ingress無効化時は既存Ingressを掃除
-func (r *MisskeyReconciler) reconcileIngress(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+func (r *MisskeyReconciler) reconcileIngress(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) error {
 	if !boolOr(m.Spec.Ingress.Enabled, true) {
 		ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: m.Name, Namespace: m.Namespace}}
 		return r.deleteIfExists(ctx, ing)

@@ -30,10 +30,10 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
-func deletingMisskey(policy string) *misskeyv1alpha1.Misskey {
+func deletingMisskey(policy string) *misskeyv1beta1.Misskey {
 	m := newMisskey()
 	m.UID = "uid-123"
 	m.Spec.DeletionPolicy = policy
@@ -44,12 +44,12 @@ func deletingMisskey(policy string) *misskeyv1alpha1.Misskey {
 }
 
 // ownedSecret: 当該Misskeyがcontroller ownerのSecret
-func ownedSecret(m *misskeyv1alpha1.Misskey, name string) *corev1.Secret {
+func ownedSecret(m *misskeyv1beta1.Misskey, name string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: m.Namespace,
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "cloudnative-misskey.dev/v1alpha1", Kind: "Misskey",
+				APIVersion: "cloudnative-misskey.dev/v1beta1", Kind: "Misskey",
 				Name: m.Name, UID: m.UID, Controller: boolPtr(true),
 			}},
 		},
@@ -59,7 +59,7 @@ func ownedSecret(m *misskeyv1alpha1.Misskey, name string) *corev1.Secret {
 func deletionScheme() *runtime.Scheme {
 	sch := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(sch)
-	_ = misskeyv1alpha1.AddToScheme(sch)
+	_ = misskeyv1beta1.AddToScheme(sch)
 	// unstructuredでGetする外部CRDをfake schemeへ登録(未存在時NotFoundになるように)
 	for _, gvk := range []schema.GroupVersionKind{cnpgClusterGVK, redisReplicationGVK, redisSentinelGVK} {
 		sch.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})

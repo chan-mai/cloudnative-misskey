@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // renderRedisBlock: redis / redisForXxx ブロックを出力
@@ -61,7 +61,7 @@ func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
 
 // Misskeyの.config/default.ymlを生成。シークレットは${PLACEHOLDER}トークンのまま残す
 // initコンテナがpod起動時に置換するため、シークレット値がConfigMapに載らない
-func renderDefaultYML(m *misskeyv1alpha1.Misskey, p plan) string {
+func renderDefaultYML(m *misskeyv1beta1.Misskey, p plan) string {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
 
@@ -133,7 +133,7 @@ func renderDefaultYML(m *misskeyv1alpha1.Misskey, p plan) string {
 }
 
 // renderPerformance: job-queue knobsをdefault.ymlへ(未設定は出力しない=Misskey既定に委ねる)
-func renderPerformance(w func(string, ...any), p misskeyv1alpha1.PerformanceSpec) {
+func renderPerformance(w func(string, ...any), p misskeyv1beta1.PerformanceSpec) {
 	writeInt := func(key string, v *int32) {
 		if v != nil {
 			w("%s: %d\n", key, *v)
@@ -149,7 +149,7 @@ func renderPerformance(w func(string, ...any), p misskeyv1alpha1.PerformanceSpec
 }
 
 // renderOutboundProxy: 外向きforward proxy設定(未設定キーは出力しない)
-func renderOutboundProxy(w func(string, ...any), o misskeyv1alpha1.OutboundProxySpec) {
+func renderOutboundProxy(w func(string, ...any), o misskeyv1beta1.OutboundProxySpec) {
 	if o.HTTP != "" {
 		w("proxy: %s\n", o.HTTP)
 	}
@@ -162,7 +162,7 @@ func renderOutboundProxy(w func(string, ...any), o misskeyv1alpha1.OutboundProxy
 }
 
 // renderFiles: media/file設定(未設定キーは出力しない)。proxyRemoteFilesは既定出力のため別処理
-func renderFiles(w func(string, ...any), f misskeyv1alpha1.FilesSpec) {
+func renderFiles(w func(string, ...any), f misskeyv1beta1.FilesSpec) {
 	if f.MaxFileSize != nil {
 		w("maxFileSize: %d\n", *f.MaxFileSize)
 	}
@@ -173,7 +173,7 @@ func renderFiles(w func(string, ...any), f misskeyv1alpha1.FilesSpec) {
 
 // migratePlan: migration用にpを複製し、DB経路をprimary直結・no-replicationへ倒す
 // managedではpooler(-pooler-rw)を迂回し-rwへ。externalはhostそのまま
-func migratePlan(m *misskeyv1alpha1.Misskey, p plan) plan {
+func migratePlan(m *misskeyv1beta1.Misskey, p plan) plan {
 	mp := p
 	if p.dbManaged {
 		mp.dbHost = nameDBService(m)
@@ -184,7 +184,7 @@ func migratePlan(m *misskeyv1alpha1.Misskey, p plan) plan {
 }
 
 // appの前段に置くリバースプロキシのCaddyfileを生成
-func renderCaddyfile(m *misskeyv1alpha1.Misskey) string {
+func renderCaddyfile(m *misskeyv1beta1.Misskey) string {
 	var b strings.Builder
 	w := func(s string) { b.WriteString(s) }
 
@@ -268,7 +268,7 @@ func defaultMaintenanceHTML(reloadSeconds int32) string {
 }
 
 // メンテナンスページ本文を返す。ユーザ指定があればそれ、なければ設定した自動再読込間隔の組込みページ
-func maintenanceHTMLContent(m *misskeyv1alpha1.Misskey) string {
+func maintenanceHTMLContent(m *misskeyv1beta1.Misskey) string {
 	reload := int32(30)
 	if r := m.Spec.Proxy.Maintenance.ReloadSeconds; r != nil {
 		reload = *r
@@ -277,7 +277,7 @@ func maintenanceHTMLContent(m *misskeyv1alpha1.Misskey) string {
 }
 
 // config ConfigMap(default.yml + Caddyfile)を作成/更新し、プロキシ有効時はメンテナンスHTMLのConfigMapも扱う
-func (r *MisskeyReconciler) reconcileConfigMaps(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+func (r *MisskeyReconciler) reconcileConfigMaps(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) error {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: nameConfig(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, cm, func() error {
 		cm.Labels = labelsFor(m, "config")
@@ -320,7 +320,7 @@ func (r *MisskeyReconciler) reconcileConfigMaps(ctx context.Context, m *misskeyv
 
 // operator管理のsetupパスワードSecretの存在を保証
 // spec.setupPasswordがありsecretRefがない時のみ作成。生成後のパスワードは上書きしない
-func (r *MisskeyReconciler) reconcileSetupSecret(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileSetupSecret(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: nameSetup(m), Namespace: m.Namespace}}
 	return r.apply(ctx, m, secret, func() error {
 		secret.Labels = labelsFor(m, "setup")
@@ -340,7 +340,7 @@ func (r *MisskeyReconciler) reconcileSetupSecret(ctx context.Context, m *misskey
 
 // このコントローラをfield managerとしてobjをserver-side apply
 // applyのread-modify-write全置換と違い、SSAは設定したフィールドのみマージし対象コントローラ所有のフィールドは保持(例: CNPGのwebhookがClusterに付与する既定値)。resync毎の差分を防ぐ
-func (r *MisskeyReconciler) applySSA(ctx context.Context, m *misskeyv1alpha1.Misskey, obj *unstructured.Unstructured) error {
+func (r *MisskeyReconciler) applySSA(ctx context.Context, m *misskeyv1beta1.Misskey, obj *unstructured.Unstructured) error {
 	if err := controllerutil.SetControllerReference(m, obj, r.Scheme); err != nil {
 		return err
 	}
@@ -349,7 +349,7 @@ func (r *MisskeyReconciler) applySSA(ctx context.Context, m *misskeyv1alpha1.Mis
 }
 
 // controller owner referenceも刻む薄いCreateOrUpdateラッパ。子はMisskeyオブジェクトと共にGCされる
-func (r *MisskeyReconciler) apply(ctx context.Context, m *misskeyv1alpha1.Misskey, obj client.Object, mutate func() error) error {
+func (r *MisskeyReconciler) apply(ctx context.Context, m *misskeyv1beta1.Misskey, obj client.Object, mutate func() error) error {
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
 		if err := mutate(); err != nil {
 			return err

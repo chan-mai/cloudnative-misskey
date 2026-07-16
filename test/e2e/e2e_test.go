@@ -40,7 +40,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 const (
@@ -59,7 +59,7 @@ func newClient(t *testing.T) client.Client {
 	if err := clientgoscheme.AddToScheme(sch); err != nil {
 		t.Fatal(err)
 	}
-	if err := misskeyv1alpha1.AddToScheme(sch); err != nil {
+	if err := misskeyv1beta1.AddToScheme(sch); err != nil {
 		t.Fatal(err)
 	}
 	cl, err := client.New(cfg, client.Options{Scheme: sch})
@@ -72,7 +72,7 @@ func newClient(t *testing.T) client.Client {
 // dumpDiagnostics: 失敗時のCI調査用にCR conditionsとpod状態を出力
 func dumpDiagnostics(t *testing.T, ctx context.Context, cl client.Client) {
 	t.Helper()
-	m := &misskeyv1alpha1.Misskey{}
+	m := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, m); err == nil {
 		t.Logf("phase=%s databaseHost=%s", m.Status.Phase, m.Status.DatabaseHost)
 		for _, c := range m.Status.Conditions {
@@ -108,21 +108,21 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("s3 secret: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:           "https://e2e.example.com/",
 			Image:         misskeyImage,
-			SetupPassword: &misskeyv1alpha1.SetupPasswordSpec{},
-			Search:        misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres:      misskeyv1alpha1.PostgresSpec{Instances: 1, Storage: resource.MustParse("2Gi")},
-			Redis:         misskeyv1alpha1.RedisSpec{Storage: resource.MustParse("1Gi")},
-			ObjectStorage: &misskeyv1alpha1.ObjectStorageSpec{
+			SetupPassword: &misskeyv1beta1.SetupPasswordSpec{},
+			Search:        misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres:      misskeyv1beta1.PostgresSpec{Instances: 1, Storage: resource.MustParse("2Gi")},
+			Redis:         misskeyv1beta1.RedisSpec{Storage: resource.MustParse("1Gi")},
+			ObjectStorage: &misskeyv1beta1.ObjectStorageSpec{
 				Bucket:   "e2e-media",
 				Endpoint: "s3.example.com",
 				Region:   "auto",
 				BaseURL:  "https://media.example.com",
-				Credentials: misskeyv1alpha1.S3Credentials{
+				Credentials: misskeyv1beta1.S3Credentials{
 					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-creds"}, Key: "ACCESS_KEY_ID"},
 					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-creds"}, Key: "SECRET_ACCESS_KEY"},
 				},
@@ -143,7 +143,7 @@ func TestE2E(t *testing.T) {
 	}
 
 	// webhook defaulting(cert-manager+webhook結線の証明): tenant未指定→namespace確定
-	got := &misskeyv1alpha1.Misskey{}
+	got := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, got); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestE2E(t *testing.T) {
 
 	// 全subsystem Ready(app/worker実起動、probe通過)
 	waitFor("Ready=True", 12*time.Minute, func(ctx context.Context) (bool, error) {
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, cur); err != nil {
 			return false, nil
 		}
@@ -191,7 +191,7 @@ func TestE2E(t *testing.T) {
 	})
 
 	// 解決済み接続先(pooler無効なのでCNPGのrwサービス)
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	waitFor("CR deleted", 3*time.Minute, func(ctx context.Context) (bool, error) {
-		err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &misskeyv1alpha1.Misskey{})
+		err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &misskeyv1beta1.Misskey{})
 		return apierrors.IsNotFound(err), nil
 	})
 	waitFor("app Deployment GC", 3*time.Minute, func(ctx context.Context) (bool, error) {

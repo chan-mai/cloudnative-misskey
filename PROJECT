@@ -15,14 +15,14 @@ resources:
   domain: dev
   group: cloudnative-misskey
   kind: Misskey
-  path: github.com/chan-mai/cloudnative-misskey/api/v1alpha1
-  version: v1alpha1
+  path: github.com/chan-mai/cloudnative-misskey/api/v1beta1
+  version: v1beta1
 - api:
     crdVersion: v1
   controller: true
   domain: dev
   group: cloudnative-misskey
   kind: MisskeyChannel
-  path: github.com/chan-mai/cloudnative-misskey/api/v1alpha1
-  version: v1alpha1
+  path: github.com/chan-mai/cloudnative-misskey/api/v1beta1
+  version: v1beta1
 version: "3"

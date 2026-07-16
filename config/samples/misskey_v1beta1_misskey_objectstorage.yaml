@@ -10,7 +10,7 @@ stringData:
   ACCESS_KEY_ID: replace-me
   SECRET_ACCESS_KEY: replace-me
 ---
-apiVersion: cloudnative-misskey.dev/v1alpha1
+apiVersion: cloudnative-misskey.dev/v1beta1
 kind: Misskey
 metadata:
   name: example-r2

@@ -43,7 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // Misskeyオブジェクトをreconcileする
@@ -71,7 +71,7 @@ func (r *MisskeyReconciler) driftInterval() time.Duration {
 
 // event: Recorder配線時のみEventを発行(テスト等の未配線ではno-op)
 // actionはregardingに対して行った操作(UpperCamelCase)、noteは人間可読メッセージ
-func (r *MisskeyReconciler) event(m *misskeyv1alpha1.Misskey, eventType, reason, action, note string, args ...any) {
+func (r *MisskeyReconciler) event(m *misskeyv1beta1.Misskey, eventType, reason, action, note string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}
@@ -99,7 +99,7 @@ func (r *MisskeyReconciler) event(m *misskeyv1alpha1.Misskey, eventType, reason,
 func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var m misskeyv1alpha1.Misskey
+	var m misskeyv1beta1.Misskey
 	if err := r.Get(ctx, req.NamespacedName, &m); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -144,7 +144,7 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 // deploymentReady: Deploymentのavailable>=desiredでcondition判定(desired=0はStopped)
-func (r *MisskeyReconciler) deploymentReady(ctx context.Context, m *misskeyv1alpha1.Misskey, name string) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) deploymentReady(ctx context.Context, m *misskeyv1beta1.Misskey, name string) (metav1.ConditionStatus, string, string) {
 	dep := &appsv1.Deployment{}
 	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: m.Namespace}, dep); err != nil {
 		return metav1.ConditionFalse, "NotCreated", "Deployment not created"
@@ -164,7 +164,7 @@ func (r *MisskeyReconciler) deploymentReady(ctx context.Context, m *misskeyv1alp
 }
 
 // databaseCondition: managed CNPGのreadyInstances判定、external=True
-func (r *MisskeyReconciler) databaseCondition(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) databaseCondition(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
 	if !p.dbManaged {
 		return metav1.ConditionTrue, "External", "external database"
 	}
@@ -185,7 +185,7 @@ func (r *MisskeyReconciler) databaseCondition(ctx context.Context, m *misskeyv1a
 // redisCondition: managed redisインスタンスの可用性を集約
 // standaloneはSTSのreadyReplicas、HAはOT operator管理podのready数をappラベルで判定
 // (既存NP/PodMonitorと同じラベル依存)。managedが無い(全external)場合はTrue
-func (r *MisskeyReconciler) redisCondition(ctx context.Context, m *misskeyv1alpha1.Misskey) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) redisCondition(ctx context.Context, m *misskeyv1beta1.Misskey) (metav1.ConditionStatus, string, string) {
 	instances := managedRedisInstances(m)
 	if len(instances) == 0 {
 		return metav1.ConditionTrue, "External", "external Redis"
@@ -236,7 +236,7 @@ func (r *MisskeyReconciler) readyPodsByAppLabel(ctx context.Context, ns, app str
 }
 
 // searchCondition: managed MeiliSearchのSTS可用性。external=True(meilisearch以外はcondition自体を外す)
-func (r *MisskeyReconciler) searchCondition(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) searchCondition(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
 	if !p.meiliManaged {
 		return metav1.ConditionTrue, "External", "external MeiliSearch"
 	}
@@ -251,7 +251,7 @@ func (r *MisskeyReconciler) searchCondition(ctx context.Context, m *misskeyv1alp
 }
 
 // objectStorageCondition: meta書込Jobの状態。autoConfigure=falseはUnmanaged(True・非gating)
-func (r *MisskeyReconciler) objectStorageCondition(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) objectStorageCondition(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (metav1.ConditionStatus, string, string) {
 	if !p.objAutoConfigure {
 		return metav1.ConditionTrue, "Unmanaged", "autoConfigure=false; apply object storage settings to the meta table yourself"
 	}
@@ -276,7 +276,7 @@ func (r *MisskeyReconciler) objectStorageCondition(ctx context.Context, m *missk
 }
 
 // migrationCondition: 現行migration Jobの状態
-func (r *MisskeyReconciler) migrationCondition(ctx context.Context, m *misskeyv1alpha1.Misskey) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) migrationCondition(ctx context.Context, m *misskeyv1beta1.Misskey) (metav1.ConditionStatus, string, string) {
 	job := &batchv1.Job{}
 	if err := r.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: m.Namespace}, job); err != nil {
 		return metav1.ConditionFalse, "Pending", "migration Job not created"
@@ -292,7 +292,7 @@ func (r *MisskeyReconciler) migrationCondition(ctx context.Context, m *misskeyv1
 }
 
 // ingressCondition: Ingress存在で判定(外部LBアドレスはcontroller依存なので見ない)
-func (r *MisskeyReconciler) ingressCondition(ctx context.Context, m *misskeyv1alpha1.Misskey) (metav1.ConditionStatus, string, string) {
+func (r *MisskeyReconciler) ingressCondition(ctx context.Context, m *misskeyv1beta1.Misskey) (metav1.ConditionStatus, string, string) {
 	ing := &networkingv1.Ingress{}
 	if err := r.Get(ctx, types.NamespacedName{Name: m.Name, Namespace: m.Namespace}, ing); err != nil {
 		return metav1.ConditionFalse, "Pending", "Ingress not created"
@@ -301,19 +301,19 @@ func (r *MisskeyReconciler) ingressCondition(ctx context.Context, m *misskeyv1al
 }
 
 // databaseReady: gate用。databaseConditionがTrueか
-func (r *MisskeyReconciler) databaseReady(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) bool {
+func (r *MisskeyReconciler) databaseReady(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) bool {
 	st, _, _ := r.databaseCondition(ctx, m, p)
 	return st == metav1.ConditionTrue
 }
 
 // redisReady: gate用, redisConditionがTrueか
-func (r *MisskeyReconciler) redisReady(ctx context.Context, m *misskeyv1alpha1.Misskey) bool {
+func (r *MisskeyReconciler) redisReady(ctx context.Context, m *misskeyv1beta1.Misskey) bool {
 	st, _, _ := r.redisCondition(ctx, m)
 	return st == metav1.ConditionTrue
 }
 
 // 全子リソースを依存順に生成
-func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	p := resolve(m)
 
 	// planがこれらのsecretを参照するため、pod前に用意
@@ -417,7 +417,7 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1alpha1
 
 // reconcile結果とappの実ヘルスをMisskeyのstatusサブリソースに反映
 // インスタンスがReadyかを返す
-func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1.Misskey, reconcileErr error) (bool, error) {
+func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1beta1.Misskey, reconcileErr error) (bool, error) {
 	p := resolve(m)
 	type cnd struct {
 		typ             string
@@ -498,7 +498,7 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1
 
 	// conflict時はGet-modify-Updateごとやり直す
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(m), cur); err != nil {
 			return err
 		}
@@ -535,7 +535,7 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1alpha1
 }
 
 // readBackupStatus: CNPG Cluster statusのバックアップ時刻をstatusへ写す(backup有効時のみ)
-func (r *MisskeyReconciler) readBackupStatus(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) *misskeyv1alpha1.BackupStatus {
+func (r *MisskeyReconciler) readBackupStatus(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) *misskeyv1beta1.BackupStatus {
 	if !p.dbManaged || m.Spec.Postgres.Backup == nil {
 		return nil
 	}
@@ -544,7 +544,7 @@ func (r *MisskeyReconciler) readBackupStatus(ctx context.Context, m *misskeyv1al
 	if err := r.Get(ctx, types.NamespacedName{Name: nameDB(m), Namespace: m.Namespace}, cluster); err != nil {
 		return nil
 	}
-	st := &misskeyv1alpha1.BackupStatus{}
+	st := &misskeyv1beta1.BackupStatus{}
 	if s, _, _ := unstructured.NestedString(cluster.Object, "status", "lastSuccessfulBackup"); s != "" {
 		if t, err := time.Parse(time.RFC3339, s); err == nil {
 			st.LastSuccessfulBackup = metav1.NewTime(t)
@@ -563,7 +563,7 @@ func (r *MisskeyReconciler) readBackupStatus(ctx context.Context, m *misskeyv1al
 
 // misskeysForChannel: Channel変更を参照する全namespaceのMisskeyへ広播(image解決の再評価)
 func (r *MisskeyReconciler) misskeysForChannel(ctx context.Context, obj client.Object) []reconcile.Request {
-	var list misskeyv1alpha1.MisskeyList
+	var list misskeyv1beta1.MisskeyList
 	if err := r.List(ctx, &list); err != nil {
 		return nil
 	}
@@ -580,7 +580,7 @@ func (r *MisskeyReconciler) misskeysForChannel(ctx context.Context, obj client.O
 // misskeysInNamespace: Secret変更を同一namespaceの全Misskeyへ広播(参照Secretのローテ検知)
 // Owns(Secret)は所有分のみ発火するため、CNPG払い出しやユーザ持込Secretの更新はここで拾う
 func (r *MisskeyReconciler) misskeysInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
-	var list misskeyv1alpha1.MisskeyList
+	var list misskeyv1beta1.MisskeyList
 	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
@@ -594,9 +594,9 @@ func (r *MisskeyReconciler) misskeysInNamespace(ctx context.Context, obj client.
 // コントローラと所有リソースを結線
 func (r *MisskeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&misskeyv1alpha1.Misskey{}).
+		For(&misskeyv1beta1.Misskey{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.misskeysInNamespace)).
-		Watches(&misskeyv1alpha1.MisskeyChannel{}, handler.EnqueueRequestsFromMapFunc(r.misskeysForChannel)).
+		Watches(&misskeyv1beta1.MisskeyChannel{}, handler.EnqueueRequestsFromMapFunc(r.misskeysForChannel)).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).

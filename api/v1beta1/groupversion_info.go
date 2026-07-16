@@ -15,10 +15,10 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-// Package v1alpha1 contains API Schema definitions for the misskey v1alpha1 API group.
+// Package v1beta1 contains API Schema definitions for the misskey v1beta1 API group.
 // +kubebuilder:object:generate=true
 // +groupName=cloudnative-misskey.dev
-package v1alpha1
+package v1beta1
 
 import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,7 +27,7 @@ import (
 
 var (
 	// GroupVersion is group version used to register these objects.
-	GroupVersion = schema.GroupVersion{Group: "cloudnative-misskey.dev", Version: "v1alpha1"}
+	GroupVersion = schema.GroupVersion{Group: "cloudnative-misskey.dev", Version: "v1beta1"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion} //nolint:staticcheck // kubebuilder標準の登録パターンを維持(依存最小化勧告は許容)

@@ -48,7 +48,7 @@ spec:
       name: Index
       priority: 1
       type: string
-    name: v1alpha1
+    name: v1beta1
     schema:
       openAPIV3Schema:
         description: Misskey is the Schema for the misskeys API.
@@ -80,8 +80,8 @@ spec:
                   autoscaling:
                     description: |-
                       Autoscaling replaces the static Replicas with a HorizontalPodAutoscaler
-                      (CPU/memory) or, when queues are set, a KEDA ScaledObject (BullMQ queue
-                      depth). HPA needs metrics-server; queue scaling needs KEDA installed.
+                      (CPU/memory, needs metrics-server) or, when rps is set, a KEDA
+                      ScaledObject on the proxy's request rate.
                     properties:
                       maxReplicas:
                         description: MaxReplicas is the upper bound.
@@ -95,41 +95,12 @@ spec:
                         format: int32
                         minimum: 0
                         type: integer
-                      queues:
-                        description: |-
-                          Queues, when set, switches the mechanism to a KEDA ScaledObject that scales on
-                          BullMQ queue wait-list depth. Requires KEDA in the cluster. Meaningful for the
-                          worker; typically deliver and inbox.
-                        items:
-                          description: QueueScaleTrigger scales on the wait-list depth
-                            of one BullMQ queue.
-                          properties:
-                            listLength:
-                              description: ListLength is the target average wait-list
-                                length per replica.
-                              format: int32
-                              minimum: 1
-                              type: integer
-                            listName:
-                              description: |-
-                                ListName overrides the exact Redis key watched. Defaults to the computed
-                                BullMQ wait-list key for Name.
-                              type: string
-                            name:
-                              description: Name is the BullMQ queue name, e.g. deliver,
-                                inbox.
-                              type: string
-                          required:
-                          - listLength
-                          - name
-                          type: object
-                        type: array
                       rps:
                         description: |-
                           RPS, when set, switches the mechanism to a KEDA ScaledObject that scales
-                          on the proxy's request rate via a prometheus trigger. Intended for the
-                          app component; requires KEDA and monitoring.enabled (or an equivalent
-                          scrape) so the Caddy metrics are collected.
+                          on the proxy's request rate via a prometheus trigger. Requires KEDA and
+                          monitoring.enabled (or an equivalent scrape) so the Caddy metrics are
+                          collected.
                         properties:
                           query:
                             description: Query overrides the default PromQL (this
@@ -467,9 +438,10 @@ spec:
                       serviceMonitorSelector/podMonitorSelector matches them (e.g. release: kps).
                     type: object
                   redisExporterImage:
-                    default: oliver006/redis_exporter:v1.62.0-alpine
-                    description: RedisExporterImage is the redis_exporter sidecar
-                      image for standalone Redis.
+                    description: |-
+                      RedisExporterImage is the redis_exporter sidecar image for standalone Redis.
+                      Defaults on the operator side (not persisted into the CR), so operator
+                      upgrades can evolve it fleet-wide.
                     type: string
                   rules:
                     description: |-
@@ -690,10 +662,10 @@ spec:
                       values keyed by column name. Secrets belong in credentials, not here.
                     type: object
                   image:
-                    default: ghcr.io/cloudnative-pg/postgresql:17
                     description: |-
-                      Image is the psql-capable image for the meta-write Job. Defaults to the
-                      CNPG PostgreSQL image, which ships psql 16+ (required for \getenv).
+                      Image is the psql-capable image for the meta-write Job. Defaults on the
+                      operator side to the CNPG PostgreSQL image, which ships psql 16+
+                      (required for \getenv).
                     type: string
                   port:
                     description: Port overrides the endpoint port. Omit for the scheme
@@ -973,9 +945,12 @@ spec:
                     - passwordSecret
                     - user
                     type: object
-                  imageName:
+                  image:
                     default: ghcr.io/cloudnative-pg/postgresql:17
-                    description: ImageName overrides the CNPG PostgreSQL image.
+                    description: |-
+                      Image is the CNPG PostgreSQL image (CNPG imageName). The default is
+                      persisted at creation so the PostgreSQL major version stays pinned for
+                      the cluster's lifetime regardless of operator upgrades.
                     type: string
                   import:
                     description: |-
@@ -1378,8 +1353,10 @@ spec:
                       targets the app directly.
                     type: boolean
                   image:
-                    default: caddy:2
-                    description: Image for the Caddy proxy container.
+                    description: |-
+                      Image for the Caddy proxy container. Defaults to caddy:2 on the operator
+                      side (not persisted into the CR), so operator upgrades can evolve it
+                      fleet-wide.
                     type: string
                   maintenance:
                     description: Maintenance configures the fallback page served when
@@ -1612,6 +1589,15 @@ spec:
                       MaxMemoryPolicy sets --maxmemory-policy. Default noeviction, because this
                       Redis also backs the job queue (BullMQ) and an eviction policy such as
                       allkeys-lru would silently drop queued/delayed jobs under memory pressure.
+                    enum:
+                    - noeviction
+                    - allkeys-lru
+                    - allkeys-lfu
+                    - allkeys-random
+                    - volatile-lru
+                    - volatile-lfu
+                    - volatile-random
+                    - volatile-ttl
                     type: string
                   resources:
                     description: Resources for the managed Redis container.
@@ -1799,6 +1785,15 @@ spec:
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
                               managed instance.
+                            enum:
+                            - noeviction
+                            - allkeys-lru
+                            - allkeys-lfu
+                            - allkeys-random
+                            - volatile-lru
+                            - volatile-lfu
+                            - volatile-random
+                            - volatile-ttl
                             type: string
                           resources:
                             description: Resources override for this role's managed
@@ -2000,6 +1995,15 @@ spec:
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
                               managed instance.
+                            enum:
+                            - noeviction
+                            - allkeys-lru
+                            - allkeys-lfu
+                            - allkeys-random
+                            - volatile-lru
+                            - volatile-lfu
+                            - volatile-random
+                            - volatile-ttl
                             type: string
                           resources:
                             description: Resources override for this role's managed
@@ -2201,6 +2205,15 @@ spec:
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
                               managed instance.
+                            enum:
+                            - noeviction
+                            - allkeys-lru
+                            - allkeys-lfu
+                            - allkeys-random
+                            - volatile-lru
+                            - volatile-lfu
+                            - volatile-random
+                            - volatile-ttl
                             type: string
                           resources:
                             description: Resources override for this role's managed
@@ -2402,6 +2415,15 @@ spec:
                           maxMemoryPolicy:
                             description: MaxMemoryPolicy override for this role's
                               managed instance.
+                            enum:
+                            - noeviction
+                            - allkeys-lru
+                            - allkeys-lfu
+                            - allkeys-random
+                            - volatile-lru
+                            - volatile-lfu
+                            - volatile-random
+                            - volatile-ttl
                             type: string
                           resources:
                             description: Resources override for this role's managed
@@ -2853,8 +2875,8 @@ spec:
                   autoscaling:
                     description: |-
                       Autoscaling replaces the static Replicas with a HorizontalPodAutoscaler
-                      (CPU/memory) or, when queues are set, a KEDA ScaledObject (BullMQ queue
-                      depth). HPA needs metrics-server; queue scaling needs KEDA installed.
+                      (CPU/memory, needs metrics-server) or, when queues is set, a KEDA
+                      ScaledObject on BullMQ queue depth.
                     properties:
                       maxReplicas:
                         description: MaxReplicas is the upper bound.
@@ -2871,8 +2893,8 @@ spec:
                       queues:
                         description: |-
                           Queues, when set, switches the mechanism to a KEDA ScaledObject that scales on
-                          BullMQ queue wait-list depth. Requires KEDA in the cluster. Meaningful for the
-                          worker; typically deliver and inbox.
+                          BullMQ queue wait-list depth. Requires KEDA in the cluster. Typically deliver
+                          and inbox.
                         items:
                           description: QueueScaleTrigger scales on the wait-list depth
                             of one BullMQ queue.
@@ -2897,34 +2919,6 @@ spec:
                           - name
                           type: object
                         type: array
-                      rps:
-                        description: |-
-                          RPS, when set, switches the mechanism to a KEDA ScaledObject that scales
-                          on the proxy's request rate via a prometheus trigger. Intended for the
-                          app component; requires KEDA and monitoring.enabled (or an equivalent
-                          scrape) so the Caddy metrics are collected.
-                        properties:
-                          query:
-                            description: Query overrides the default PromQL (this
-                              instance's total proxy RPS).
-                            type: string
-                          serverAddress:
-                            description: |-
-                              ServerAddress is the Prometheus endpoint KEDA queries, e.g.
-                              http://prometheus.monitoring:9090.
-                            maxLength: 2048
-                            minLength: 1
-                            type: string
-                          targetRPS:
-                            description: TargetRPS is the request rate each replica
-                              should absorb.
-                            format: int32
-                            minimum: 1
-                            type: integer
-                        required:
-                        - serverAddress
-                        - targetRPS
-                        type: object
                       targetCPUUtilizationPercentage:
                         description: TargetCPUUtilizationPercentage adds a CPU utilization
                           metric. Unset omits it.

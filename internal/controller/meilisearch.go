@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // nバイトの暗号学的乱数hex文字列を返す
@@ -41,7 +41,7 @@ func randomHex(n int) (string, error) {
 
 // operator管理のマスターキーSecretの存在を保証
 // MeiliSearchがmanagedかつユーザがマスターキー未指定の時のみ作成。生成後のキーは上書きしない
-func (r *MisskeyReconciler) reconcileMeiliSecret(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcileMeiliSecret(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	if m.Spec.Search.Meilisearch.MasterKeySecret != nil {
 		return nil // キーはユーザが管理
 	}
@@ -63,7 +63,7 @@ func (r *MisskeyReconciler) reconcileMeiliSecret(ctx context.Context, m *misskey
 }
 
 // MeiliSearchのServiceとStatefulSetを作成/更新
-func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) error {
+func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: nameMeili(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, svc, func() error {
 		svc.Labels = labelsFor(m, "meilisearch")

@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // MisskeyChannelReconciler: fleet imageチャンネルのロールアウト状態を管理
@@ -47,7 +47,7 @@ type MisskeyChannelReconciler struct {
 // +kubebuilder:rbac:groups=cloudnative-misskey.dev,resources=misskeychannels/status,verbs=get;update;patch
 
 func (r *MisskeyChannelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	ch := &misskeyv1alpha1.MisskeyChannel{}
+	ch := &misskeyv1beta1.MisskeyChannel{}
 	if err := r.Get(ctx, req.NamespacedName, ch); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -70,7 +70,7 @@ func (r *MisskeyChannelReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// 参照インスタンスと配信対象imageへの追従数を集計
-	var list misskeyv1alpha1.MisskeyList
+	var list misskeyv1beta1.MisskeyList
 	if err := r.List(ctx, &list); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -87,7 +87,7 @@ func (r *MisskeyChannelReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur := &misskeyv1alpha1.MisskeyChannel{}
+		cur := &misskeyv1beta1.MisskeyChannel{}
 		if err := r.Get(ctx, req.NamespacedName, cur); err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func (r *MisskeyChannelReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 // channelOfMisskey: Misskeyの変化を参照先Channelのreconcileへ写像(追従カウンタ更新)
 func (r *MisskeyChannelReconciler) channelOfMisskey(ctx context.Context, obj client.Object) []reconcile.Request {
-	m, ok := obj.(*misskeyv1alpha1.Misskey)
+	m, ok := obj.(*misskeyv1beta1.Misskey)
 	if !ok || m.Spec.ImageFrom == nil {
 		return nil
 	}
@@ -136,7 +136,7 @@ func (r *MisskeyChannelReconciler) channelOfMisskey(ctx context.Context, obj cli
 
 func (r *MisskeyChannelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&misskeyv1alpha1.MisskeyChannel{}).
-		Watches(&misskeyv1alpha1.Misskey{}, handler.EnqueueRequestsFromMapFunc(r.channelOfMisskey)).
+		For(&misskeyv1beta1.MisskeyChannel{}).
+		Watches(&misskeyv1beta1.Misskey{}, handler.EnqueueRequestsFromMapFunc(r.channelOfMisskey)).
 		Complete(r)
 }

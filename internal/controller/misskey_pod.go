@@ -21,7 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 const (
@@ -85,7 +85,7 @@ func httpProbe(path string, period, timeout, failure int32) *corev1.Probe {
 }
 
 // app/workerロール共通のPodSpecを生成
-func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp misskeyv1alpha1.ComponentSpec) corev1.PodSpec {
+func buildMisskeyPodSpec(m *misskeyv1beta1.Misskey, p plan, role string, comp misskeyv1beta1.ComponentSpec) corev1.PodSpec {
 	env := []corev1.EnvVar{
 		{Name: "COREPACK_INTEGRITY_KEYS", Value: "0"},
 		{Name: "MK_DISABLE_CLUSTERING", Value: "true"},
@@ -139,7 +139,7 @@ func buildMisskeyPodSpec(m *misskeyv1alpha1.Misskey, p plan, role string, comp m
 
 // misskeyInitContainers: built/をwritable emptyDirへコピー + default.ymlのプレースホルダ展開
 // app/worker/migration Jobで共用。builtPathが空ならコピーinitを省く
-func misskeyInitContainers(m *misskeyv1alpha1.Misskey, p plan) []corev1.Container {
+func misskeyInitContainers(m *misskeyv1beta1.Misskey, p plan) []corev1.Container {
 	var inits []corev1.Container
 	if bp := runtimeBuiltPath(m); bp != "" {
 		// built/を書込可能なemptyDirにコピー。compile-config等が書くため
@@ -168,7 +168,7 @@ func misskeyInitContainers(m *misskeyv1alpha1.Misskey, p plan) []corev1.Containe
 
 // misskeyVolumes: config template(cfg ConfigMap) / rendered、builtPath有効時はbuilt emptyDir
 // cfgでtemplate元ConfigMapを切替(app/worker=nameConfig、migration=nameMigrateConfig)
-func misskeyVolumes(m *misskeyv1alpha1.Misskey, cfg string) []corev1.Volume {
+func misskeyVolumes(m *misskeyv1beta1.Misskey, cfg string) []corev1.Volume {
 	vols := []corev1.Volume{
 		{
 			Name: "config-tpl",
@@ -187,7 +187,7 @@ func misskeyVolumes(m *misskeyv1alpha1.Misskey, cfg string) []corev1.Volume {
 }
 
 // misskeyConfigMounts: default.ymlをread-only、builtPath有効時はwritableでマウント(main container用)
-func misskeyConfigMounts(m *misskeyv1alpha1.Misskey) []corev1.VolumeMount {
+func misskeyConfigMounts(m *misskeyv1beta1.Misskey) []corev1.VolumeMount {
 	mounts := []corev1.VolumeMount{
 		{Name: "config-rendered", MountPath: runtimeConfigPath(m), SubPath: "default.yml", ReadOnly: true},
 	}

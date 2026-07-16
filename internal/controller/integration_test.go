@@ -43,7 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // setupEnvtest: envtest(etcd+apiserver)を起動しclientを返す。KUBEBUILDER_ASSETS未設定ならskip
@@ -66,7 +66,7 @@ func setupEnvtest(t *testing.T) (context.Context, client.Client, *runtime.Scheme
 	if err := clientgoscheme.AddToScheme(sch); err != nil {
 		t.Fatal(err)
 	}
-	if err := misskeyv1alpha1.AddToScheme(sch); err != nil {
+	if err := misskeyv1beta1.AddToScheme(sch); err != nil {
 		t.Fatal(err)
 	}
 	cl, err := client.New(cfg, client.Options{Scheme: sch})
@@ -80,7 +80,7 @@ func exists(ctx context.Context, cl client.Client, obj client.Object, name, ns s
 	return cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, obj) == nil
 }
 
-func hasCondition(m *misskeyv1alpha1.Misskey, typ string, want metav1.ConditionStatus) bool {
+func hasCondition(m *misskeyv1beta1.Misskey, typ string, want metav1.ConditionStatus) bool {
 	for _, c := range m.Status.Conditions {
 		if c.Type == typ {
 			return c.Status == want
@@ -98,20 +98,20 @@ func TestReconcileIntegration(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "ex", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:                "https://it.example.com/",
 			Image:              "misskey/misskey:x",
 			IDGenerationMethod: "aidx",
-			SetupPassword:      &misskeyv1alpha1.SetupPasswordSpec{},
-			Search:             misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			SetupPassword:      &misskeyv1beta1.SetupPasswordSpec{},
+			Search:             misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis:   misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
-			Ingress: misskeyv1alpha1.IngressSpec{Host: "it.example.com"},
+			Redis:   misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
+			Ingress: misskeyv1beta1.IngressSpec{Host: "it.example.com"},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -130,7 +130,7 @@ func TestReconcileIntegration(t *testing.T) {
 	}
 
 	// finalizer付与
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestReconcileIntegration(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		reconcile()
 	}
-	if err := cl.Get(ctx, req.NamespacedName, &misskeyv1alpha1.Misskey{}); !apierrors.IsNotFound(err) {
+	if err := cl.Get(ctx, req.NamespacedName, &misskeyv1beta1.Misskey{}); !apierrors.IsNotFound(err) {
 		t.Errorf("Misskey still exists after delete: %v", err)
 	}
 }
@@ -221,20 +221,22 @@ func TestSuspendResume(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "sus", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:    "https://sus.example.com/",
 			Image:  "misskey/misskey:v1",
-			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			App: misskeyv1alpha1.ComponentSpec{
-				Autoscaling: &misskeyv1alpha1.AutoscalingSpec{MaxReplicas: 3},
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			App: misskeyv1beta1.AppSpec{
+				Autoscaling: &misskeyv1beta1.AppAutoscalingSpec{
+					AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 3},
+				},
 			},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -248,8 +250,8 @@ func TestSuspendResume(t *testing.T) {
 			t.Fatalf("reconcile: %v", err)
 		}
 	}
-	update := func(mutate func(*misskeyv1alpha1.Misskey)) {
-		cur := &misskeyv1alpha1.Misskey{}
+	update := func(mutate func(*misskeyv1beta1.Misskey)) {
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 			t.Fatal(err)
 		}
@@ -259,7 +261,7 @@ func TestSuspendResume(t *testing.T) {
 		}
 	}
 	succeedMigration := func() {
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 			t.Fatal(err)
 		}
@@ -299,7 +301,7 @@ func TestSuspendResume(t *testing.T) {
 	}
 
 	// suspend → replicas 0・HPA削除・Phase=Suspended
-	update(func(c *misskeyv1alpha1.Misskey) { c.Spec.Suspend = true })
+	update(func(c *misskeyv1beta1.Misskey) { c.Spec.Suspend = true })
 	reconcile()
 	if got := appReplicas(); got != 0 {
 		t.Errorf("app replicas=%d after suspend, want 0", got)
@@ -307,7 +309,7 @@ func TestSuspendResume(t *testing.T) {
 	if exists(ctx, cl, &autoscalingv2.HorizontalPodAutoscaler{}, nameApp(m), ns) {
 		t.Error("HPA still exists after suspend")
 	}
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +321,7 @@ func TestSuspendResume(t *testing.T) {
 	}
 
 	// suspend中のimage変更では新migration Jobを作らない
-	update(func(c *misskeyv1alpha1.Misskey) { c.Spec.Image = "misskey/misskey:v2" })
+	update(func(c *misskeyv1beta1.Misskey) { c.Spec.Image = "misskey/misskey:v2" })
 	reconcile()
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
@@ -329,7 +331,7 @@ func TestSuspendResume(t *testing.T) {
 	}
 
 	// resume → 新migration完了後にapp replicasがminReplicas(既定1)で再点火
-	update(func(c *misskeyv1alpha1.Misskey) { c.Spec.Suspend = false })
+	update(func(c *misskeyv1beta1.Misskey) { c.Spec.Suspend = false })
 	reconcile()
 	succeedMigration()
 	for i := 0; i < 2; i++ {
@@ -351,9 +353,9 @@ func TestChannelResolveNoPersist(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 
-	ch := &misskeyv1alpha1.MisskeyChannel{
+	ch := &misskeyv1beta1.MisskeyChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "stable"},
-		Spec:       misskeyv1alpha1.MisskeyChannelSpec{Image: "misskey/misskey:v1"},
+		Spec:       misskeyv1beta1.MisskeyChannelSpec{Image: "misskey/misskey:v1"},
 	}
 	if err := cl.Create(ctx, ch); err != nil {
 		t.Fatalf("create channel: %v", err)
@@ -364,17 +366,17 @@ func TestChannelResolveNoPersist(t *testing.T) {
 		t.Fatalf("channel reconcile: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "flt", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:       "https://flt.example.com/",
-			ImageFrom: &misskeyv1alpha1.ImageFromSource{Channel: "stable"},
-			Search:    misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			ImageFrom: &misskeyv1beta1.ImageFromSource{Channel: "stable"},
+			Search:    misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -389,7 +391,7 @@ func TestChannelResolveNoPersist(t *testing.T) {
 	}
 
 	// APIのspec.imageは空のまま(in-memory解決のみ)
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +411,7 @@ func TestChannelResolveNoPersist(t *testing.T) {
 	if _, err := cr.Reconcile(ctx, chReq); err != nil {
 		t.Fatalf("channel reconcile: %v", err)
 	}
-	curCh := &misskeyv1alpha1.MisskeyChannel{}
+	curCh := &misskeyv1beta1.MisskeyChannel{}
 	if err := cl.Get(ctx, chReq.NamespacedName, curCh); err != nil {
 		t.Fatal(err)
 	}
@@ -442,11 +444,11 @@ func TestChannelStagedRollout(t *testing.T) {
 		t.Fatal("could not find names whose buckets straddle 50")
 	}
 
-	ch := &misskeyv1alpha1.MisskeyChannel{
+	ch := &misskeyv1beta1.MisskeyChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "canary"},
-		Spec: misskeyv1alpha1.MisskeyChannelSpec{
+		Spec: misskeyv1beta1.MisskeyChannelSpec{
 			Image:   "misskey/misskey:v1",
-			Rollout: &misskeyv1alpha1.ChannelRollout{BatchPercent: 50, Interval: metav1.Duration{Duration: time.Hour}},
+			Rollout: &misskeyv1beta1.ChannelRollout{BatchPercent: 50, Interval: metav1.Duration{Duration: time.Hour}},
 		},
 	}
 	if err := cl.Create(ctx, ch); err != nil {
@@ -460,17 +462,17 @@ func TestChannelStagedRollout(t *testing.T) {
 
 	r := &MisskeyReconciler{Client: cl, Scheme: sch}
 	newMK := func(name string) ctrl.Request {
-		m := &misskeyv1alpha1.Misskey{
+		m := &misskeyv1beta1.Misskey{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Spec: misskeyv1alpha1.MisskeySpec{
+			Spec: misskeyv1beta1.MisskeySpec{
 				URL:       fmt.Sprintf("https://%s.example.com/", name),
-				ImageFrom: &misskeyv1alpha1.ImageFromSource{Channel: "canary"},
-				Search:    misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-				Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+				ImageFrom: &misskeyv1beta1.ImageFromSource{Channel: "canary"},
+				Search:    misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+				Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 					Host: "pg", Database: "d", User: "u",
 					PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 				}},
-				Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+				Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
 			},
 		}
 		if err := cl.Create(ctx, m); err != nil {
@@ -483,7 +485,7 @@ func TestChannelStagedRollout(t *testing.T) {
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			t.Fatalf("reconcile %s: %v", req.Name, err)
 		}
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 			t.Fatal(err)
 		}
@@ -496,7 +498,7 @@ func TestChannelStagedRollout(t *testing.T) {
 	}
 
 	// image更新→ロールアウト開始。第1バッチ(bucket<50)のみv2
-	curCh := &misskeyv1alpha1.MisskeyChannel{}
+	curCh := &misskeyv1beta1.MisskeyChannel{}
 	if err := cl.Get(ctx, chReq.NamespacedName, curCh); err != nil {
 		t.Fatal(err)
 	}
@@ -527,12 +529,12 @@ func TestChannelDigestTracking(t *testing.T) {
 	dr.headFunc = func(_ context.Context, _ string, _ authn.Keychain) (string, error) {
 		return "sha256:d1", nil
 	}
-	ch := &misskeyv1alpha1.MisskeyChannel{
+	ch := &misskeyv1beta1.MisskeyChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tracked"},
-		Spec: misskeyv1alpha1.MisskeyChannelSpec{
+		Spec: misskeyv1beta1.MisskeyChannelSpec{
 			Image:            "misskey/misskey:latest",
 			TrackImageDigest: true,
-			Rollout:          &misskeyv1alpha1.ChannelRollout{BatchPercent: 50, Interval: metav1.Duration{Duration: time.Hour}},
+			Rollout:          &misskeyv1beta1.ChannelRollout{BatchPercent: 50, Interval: metav1.Duration{Duration: time.Hour}},
 		},
 	}
 	if err := cl.Create(ctx, ch); err != nil {
@@ -544,7 +546,7 @@ func TestChannelDigestTracking(t *testing.T) {
 		t.Fatalf("channel reconcile: %v", err)
 	}
 
-	cur := &misskeyv1alpha1.MisskeyChannel{}
+	cur := &misskeyv1beta1.MisskeyChannel{}
 	if err := cl.Get(ctx, chReq.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -602,17 +604,17 @@ func TestOptOutCleanup(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "oo", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:    "https://oo.example.com/",
 			Image:  "misskey/misskey:x",
-			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -648,8 +650,8 @@ func TestOptOutCleanup(t *testing.T) {
 			t.Fatalf("reconcile: %v", err)
 		}
 	}
-	update := func(mutate func(*misskeyv1alpha1.Misskey)) {
-		cur := &misskeyv1alpha1.Misskey{}
+	update := func(mutate func(*misskeyv1beta1.Misskey)) {
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 			t.Fatal(err)
 		}
@@ -687,7 +689,7 @@ func TestOptOutCleanup(t *testing.T) {
 	}
 
 	// maintenanceのみ無効化 → HTML ConfigMapだけ掃除、proxyは残る
-	update(func(c *misskeyv1alpha1.Misskey) { c.Spec.Proxy.Maintenance.Enabled = boolPtr(false) })
+	update(func(c *misskeyv1beta1.Misskey) { c.Spec.Proxy.Maintenance.Enabled = boolPtr(false) })
 	reconcile()
 	if exists(ctx, cl, &corev1.ConfigMap{}, nameMaintenanceHTML(m), ns) {
 		t.Error("HTML ConfigMap still exists after disabling maintenance")
@@ -697,7 +699,7 @@ func TestOptOutCleanup(t *testing.T) {
 	}
 
 	// proxy+ingress無効化 → 全掃除
-	update(func(c *misskeyv1alpha1.Misskey) {
+	update(func(c *misskeyv1beta1.Misskey) {
 		c.Spec.Proxy.Enabled = boolPtr(false)
 		c.Spec.Ingress.Enabled = boolPtr(false)
 	})
@@ -724,17 +726,17 @@ func TestMigrationRetryOnSpecChange(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "mg", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:    "https://mg.example.com/",
 			Image:  "misskey/misskey:x",
-			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -774,7 +776,7 @@ func TestMigrationRetryOnSpecChange(t *testing.T) {
 	}
 
 	// 入力変更(concurrently flag) → 失敗Jobを削除し再生成
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -810,17 +812,17 @@ func TestSecretRotationRollsPods(t *testing.T) {
 		t.Fatalf("secret: %v", err)
 	}
 
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "rot", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:    "https://rot.example.com/",
 			Image:  "misskey/misskey:x",
-			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
 		},
 	}
 	if err := cl.Create(ctx, m); err != nil {
@@ -883,13 +885,13 @@ func TestRedisStandaloneAuth(t *testing.T) {
 	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
 		t.Fatalf("ns: %v", err)
 	}
-	m := &misskeyv1alpha1.Misskey{
+	m := &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "ra", Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:    "https://ra.example.com/",
 			Image:  "misskey/misskey:x",
-			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
@@ -944,22 +946,22 @@ func TestRedisStandaloneAuth(t *testing.T) {
 }
 
 // objStorageCR: external backend + objectStorage(sqlLike)のテスト用CR
-func objStorageCR(name, ns string, auto *bool) *misskeyv1alpha1.Misskey {
-	return &misskeyv1alpha1.Misskey{
+func objStorageCR(name, ns string, auto *bool) *misskeyv1beta1.Misskey {
+	return &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:    "https://" + name + ".example.com/",
 			Image:  "misskey/misskey:x",
-			Search: misskeyv1alpha1.SearchSpec{Provider: misskeyv1alpha1.SearchSQLLike},
-			Postgres: misskeyv1alpha1.PostgresSpec{External: &misskeyv1alpha1.ExternalPostgres{
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
 				Host: "pg", Database: "d", User: "u",
 				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
 			}},
-			Redis: misskeyv1alpha1.RedisSpec{External: &misskeyv1alpha1.ExternalRedis{Host: "redis"}},
-			ObjectStorage: &misskeyv1alpha1.ObjectStorageSpec{
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
+			ObjectStorage: &misskeyv1beta1.ObjectStorageSpec{
 				Bucket: "media", Endpoint: "acct.r2.cloudflarestorage.com", Region: "auto", BaseURL: "https://cdn.example.com",
 				AutoConfigure: auto,
-				Credentials: misskeyv1alpha1.S3Credentials{
+				Credentials: misskeyv1beta1.S3Credentials{
 					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "ak"},
 					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "sk"},
 				},
@@ -968,7 +970,7 @@ func objStorageCR(name, ns string, auto *bool) *misskeyv1alpha1.Misskey {
 	}
 }
 
-func objStorageJobs(t *testing.T, ctx context.Context, cl client.Client, m *misskeyv1alpha1.Misskey) []batchv1.Job {
+func objStorageJobs(t *testing.T, ctx context.Context, cl client.Client, m *misskeyv1beta1.Misskey) []batchv1.Job {
 	t.Helper()
 	var jobs batchv1.JobList
 	if err := cl.List(ctx, &jobs, client.InNamespace(m.Namespace), client.MatchingLabels(selectorFor(m, "objstorage"))); err != nil {
@@ -1041,7 +1043,7 @@ func TestObjectStorageGate(t *testing.T) {
 	if !exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) {
 		t.Error("app Deployment not created after objstorage Job succeeded")
 	}
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -1090,7 +1092,7 @@ func TestObjectStorageAutoConfigureFalse(t *testing.T) {
 	if !exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) {
 		t.Error("app Deployment must be created (not gated on objstorage) when autoConfigure=false")
 	}
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -1136,7 +1138,7 @@ func TestObjectStorageChangeReRuns(t *testing.T) {
 	firstName := first[0].Name
 
 	// bucketを変更→新名Job、旧掃除
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -1191,7 +1193,7 @@ func TestObjectStorageRemovalCleanup(t *testing.T) {
 		t.Fatal("setup: expected objstorage Job and SQL CM")
 	}
 	// objectStorageブロック削除
-	cur := &misskeyv1alpha1.Misskey{}
+	cur := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
 		t.Fatal(err)
 	}
@@ -1216,10 +1218,10 @@ func TestCELValidation(t *testing.T) {
 	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
 		t.Fatalf("ns: %v", err)
 	}
-	valid := func(name string) *misskeyv1alpha1.Misskey {
-		return &misskeyv1alpha1.Misskey{
+	valid := func(name string) *misskeyv1beta1.Misskey {
+		return &misskeyv1beta1.Misskey{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Spec:       misskeyv1alpha1.MisskeySpec{URL: "https://cel.example.com/", Image: "misskey/misskey:x", Tenant: "t1"},
+			Spec:       misskeyv1beta1.MisskeySpec{URL: "https://cel.example.com/", Image: "misskey/misskey:x", Tenant: "t1"},
 		}
 	}
 
@@ -1230,14 +1232,14 @@ func TestCELValidation(t *testing.T) {
 	// immutable: update時にCELが拒否
 	immutable := []struct {
 		name   string
-		mutate func(*misskeyv1alpha1.Misskey)
+		mutate func(*misskeyv1beta1.Misskey)
 	}{
-		{"url", func(m *misskeyv1alpha1.Misskey) { m.Spec.URL = "https://other.example.com/" }},
-		{"idGenerationMethod", func(m *misskeyv1alpha1.Misskey) { m.Spec.IDGenerationMethod = "meid" }},
-		{"tenant", func(m *misskeyv1alpha1.Misskey) { m.Spec.Tenant = "t2" }},
+		{"url", func(m *misskeyv1beta1.Misskey) { m.Spec.URL = "https://other.example.com/" }},
+		{"idGenerationMethod", func(m *misskeyv1beta1.Misskey) { m.Spec.IDGenerationMethod = "meid" }},
+		{"tenant", func(m *misskeyv1beta1.Misskey) { m.Spec.Tenant = "t2" }},
 	}
 	for _, tc := range immutable {
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, types.NamespacedName{Name: "ok", Namespace: ns}, cur); err != nil {
 			t.Fatalf("get: %v", err)
 		}
@@ -1248,8 +1250,8 @@ func TestCELValidation(t *testing.T) {
 	}
 
 	// recovery: 作成時指定はOK、以後の追加・変更・削除は拒否
-	rec := func() *misskeyv1alpha1.PostgresRecovery {
-		return &misskeyv1alpha1.PostgresRecovery{Source: misskeyv1alpha1.RecoverySource{
+	rec := func() *misskeyv1beta1.PostgresRecovery {
+		return &misskeyv1beta1.PostgresRecovery{Source: misskeyv1beta1.RecoverySource{
 			DestinationPath: "s3://bk/misskey", ServerName: "old-db",
 		}}
 	}
@@ -1258,8 +1260,8 @@ func TestCELValidation(t *testing.T) {
 	if err := cl.Create(ctx, okRec); err != nil {
 		t.Fatalf("recovery at creation must be accepted: %v", err)
 	}
-	imp := func() *misskeyv1alpha1.PostgresImport {
-		return &misskeyv1alpha1.PostgresImport{Source: misskeyv1alpha1.ImportSource{
+	imp := func() *misskeyv1beta1.PostgresImport {
+		return &misskeyv1beta1.PostgresImport{Source: misskeyv1beta1.ImportSource{
 			Host: "src-pg", Database: "d", User: "u",
 			PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "p"},
 		}}
@@ -1272,22 +1274,22 @@ func TestCELValidation(t *testing.T) {
 	recImmutable := []struct {
 		name   string
 		target string
-		mutate func(*misskeyv1alpha1.Misskey)
+		mutate func(*misskeyv1beta1.Misskey)
 	}{
-		{"recovery add after creation", "ok", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Recovery = rec() }},
-		{"import add after creation", "ok", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Import = imp() }},
-		{"import host change", "ok-imp", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Import.Source.Host = "other" }},
-		{"import removal", "ok-imp", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Import = nil }},
-		{"recovery targetTime change", "ok-rec", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery add after creation", "ok", func(m *misskeyv1beta1.Misskey) { m.Spec.Postgres.Recovery = rec() }},
+		{"import add after creation", "ok", func(m *misskeyv1beta1.Misskey) { m.Spec.Postgres.Import = imp() }},
+		{"import host change", "ok-imp", func(m *misskeyv1beta1.Misskey) { m.Spec.Postgres.Import.Source.Host = "other" }},
+		{"import removal", "ok-imp", func(m *misskeyv1beta1.Misskey) { m.Spec.Postgres.Import = nil }},
+		{"recovery targetTime change", "ok-rec", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery.TargetTime = "2026-07-15T00:00:00Z"
 		}},
-		{"recovery serverName change", "ok-rec", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery serverName change", "ok-rec", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery.Source.ServerName = "other"
 		}},
-		{"recovery removal", "ok-rec", func(m *misskeyv1alpha1.Misskey) { m.Spec.Postgres.Recovery = nil }},
+		{"recovery removal", "ok-rec", func(m *misskeyv1beta1.Misskey) { m.Spec.Postgres.Recovery = nil }},
 	}
 	for _, tc := range recImmutable {
-		cur := &misskeyv1alpha1.Misskey{}
+		cur := &misskeyv1beta1.Misskey{}
 		if err := cl.Get(ctx, types.NamespacedName{Name: tc.target, Namespace: ns}, cur); err != nil {
 			t.Fatalf("get: %v", err)
 		}
@@ -1297,7 +1299,7 @@ func TestCELValidation(t *testing.T) {
 		}
 	}
 	// 無関係なupdateはrecovery付きでも通る(transition ruleの偽陽性検出)
-	touched := &misskeyv1alpha1.Misskey{}
+	touched := &misskeyv1beta1.Misskey{}
 	if err := cl.Get(ctx, types.NamespacedName{Name: "ok-rec", Namespace: ns}, touched); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -1307,93 +1309,95 @@ func TestCELValidation(t *testing.T) {
 	}
 
 	// cross-field: create時にCELが拒否
-	extPG := &misskeyv1alpha1.ExternalPostgres{Host: "pg", Database: "d", User: "u",
+	extPG := &misskeyv1beta1.ExternalPostgres{Host: "pg", Database: "d", User: "u",
 		PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "p"}}
 	minR := int32(5)
 	cross := []struct {
 		name  string
-		build func(*misskeyv1alpha1.Misskey)
+		build func(*misskeyv1beta1.Misskey)
 	}{
-		{"pooler+external", func(m *misskeyv1alpha1.Misskey) {
+		{"pooler+external", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.External = extPG
-			m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+			m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{}
 		}},
-		{"backup+external", func(m *misskeyv1alpha1.Misskey) {
+		{"backup+external", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.External = extPG
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://b"}
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://b"}
 		}},
-		{"recovery+external", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery+external", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.External = extPG
 			m.Spec.Postgres.Recovery = rec()
 		}},
-		{"import+external", func(m *misskeyv1alpha1.Misskey) {
+		{"import+external", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.External = extPG
 			m.Spec.Postgres.Import = imp()
 		}},
-		{"import+recovery", func(m *misskeyv1alpha1.Misskey) {
+		{"import+recovery", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
 			m.Spec.Postgres.Import = imp()
 		}},
-		{"image+imageFrom", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.ImageFrom = &misskeyv1alpha1.ImageFromSource{Channel: "stable"}
+		{"image+imageFrom", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.ImageFrom = &misskeyv1beta1.ImageFromSource{Channel: "stable"}
 		}},
-		{"no image nor imageFrom", func(m *misskeyv1alpha1.Misskey) {
+		{"no image nor imageFrom", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Image = ""
 		}},
-		{"recovery+backup same path without serverName", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery+backup same path without serverName", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey"}
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://bk/misskey"}
 		}},
-		{"recovery+backup same path same serverName", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery+backup same path same serverName", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey", ServerName: "old-db"}
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://bk/misskey", ServerName: "old-db"}
 		}},
-		{"ha+external-redis", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "r"}
-			m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+		{"ha+external-redis", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "r"}
+			m.Spec.Redis.HA = &misskeyv1beta1.RedisHA{}
 		}},
-		{"autoscaling min>max", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.Worker.Autoscaling = &misskeyv1alpha1.AutoscalingSpec{MinReplicas: &minR, MaxReplicas: 3}
+		{"autoscaling min>max", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.Worker.Autoscaling = &misskeyv1beta1.WorkerAutoscalingSpec{
+				AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MinReplicas: &minR, MaxReplicas: 3},
+			}
 		}},
-		{"redis role external+ha", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{
-				External: &misskeyv1alpha1.ExternalRedis{Host: "r"}, HA: &misskeyv1alpha1.RedisHA{},
+		{"redis role external+ha", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{JobQueue: &misskeyv1beta1.RedisRole{
+				External: &misskeyv1beta1.ExternalRedis{Host: "r"}, HA: &misskeyv1beta1.RedisHA{},
 			}}
 		}},
-		{"external redis sentinels without masterName", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{
-				Host: "r", Sentinels: []misskeyv1alpha1.RedisHostPort{{Host: "s1"}},
+		{"external redis sentinels without masterName", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{
+				Host: "r", Sentinels: []misskeyv1beta1.RedisHostPort{{Host: "s1"}},
 			}
 		}},
 		// pattern validation(schema)
-		{"invalid maxMemory", func(m *misskeyv1alpha1.Misskey) { m.Spec.Redis.MaxMemory = "lots" }},
-		{"invalid backup schedule", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://b", Schedule: "not-cron"}
+		{"invalid maxMemory", func(m *misskeyv1beta1.Misskey) { m.Spec.Redis.MaxMemory = "lots" }},
+		{"invalid backup schedule", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://b", Schedule: "not-cron"}
 		}},
-		{"invalid monitoring interval", func(m *misskeyv1alpha1.Misskey) { m.Spec.Monitoring.Interval = "30" }},
+		{"invalid monitoring interval", func(m *misskeyv1beta1.Misskey) { m.Spec.Monitoring.Interval = "30" }},
 		// objectStorage
-		{"objectStorage without bucket", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.ObjectStorage = &misskeyv1alpha1.ObjectStorageSpec{
-				Credentials: misskeyv1alpha1.S3Credentials{
+		{"objectStorage without bucket", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.ObjectStorage = &misskeyv1beta1.ObjectStorageSpec{
+				Credentials: misskeyv1beta1.S3Credentials{
 					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "ak"},
 					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "sk"},
 				},
 			}
 		}},
-		{"objectStorage endpoint with scheme", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.ObjectStorage = &misskeyv1alpha1.ObjectStorageSpec{
+		{"objectStorage endpoint with scheme", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.ObjectStorage = &misskeyv1beta1.ObjectStorageSpec{
 				Bucket: "b", Endpoint: "https://s3.example.com",
-				Credentials: misskeyv1alpha1.S3Credentials{
+				Credentials: misskeyv1beta1.S3Credentials{
 					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "ak"},
 					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "sk"},
 				},
 			}
 		}},
-		{"objectStorage extraColumns invalid identifier", func(m *misskeyv1alpha1.Misskey) {
-			m.Spec.ObjectStorage = &misskeyv1alpha1.ObjectStorageSpec{
+		{"objectStorage extraColumns invalid identifier", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.ObjectStorage = &misskeyv1beta1.ObjectStorageSpec{
 				Bucket:       "b",
 				ExtraColumns: map[string]string{"bad col; DROP": "x"},
-				Credentials: misskeyv1alpha1.S3Credentials{
+				Credentials: misskeyv1beta1.S3Credentials{
 					AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "ak"},
 					SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "sk"},
 				},
@@ -1411,19 +1415,19 @@ func TestCELValidation(t *testing.T) {
 	// 肯定: 同一destinationPathでもserverName相違なら許可, 別destinationPathはserverName無しで許可
 	positive := []struct {
 		name  string
-		build func(*misskeyv1alpha1.Misskey)
+		build func(*misskeyv1beta1.Misskey)
 	}{
-		{"recovery+backup same path distinct serverName", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery+backup same path distinct serverName", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey", ServerName: "new-db"}
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://bk/misskey", ServerName: "new-db"}
 		}},
-		{"recovery+backup different path", func(m *misskeyv1alpha1.Misskey) {
+		{"recovery+backup different path", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Postgres.Recovery = rec()
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk2/misskey"}
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://bk2/misskey"}
 		}},
-		{"imageFrom only", func(m *misskeyv1alpha1.Misskey) {
+		{"imageFrom only", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Image = ""
-			m.Spec.ImageFrom = &misskeyv1alpha1.ImageFromSource{Channel: "stable"}
+			m.Spec.ImageFrom = &misskeyv1beta1.ImageFromSource{Channel: "stable"}
 		}},
 	}
 	for i, tc := range positive {

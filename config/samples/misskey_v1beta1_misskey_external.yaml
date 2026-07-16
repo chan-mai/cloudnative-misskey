@@ -1,6 +1,6 @@
 # Generic mode: point the app/worker at pre-existing DB / Redis / MeiliSearch
 # and skip the built-in proxy. Only app + worker + config + ingress are created.
-apiVersion: cloudnative-misskey.dev/v1alpha1
+apiVersion: cloudnative-misskey.dev/v1beta1
 kind: Misskey
 metadata:
   name: solo

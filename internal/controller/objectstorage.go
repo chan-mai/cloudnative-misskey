@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // metaRowID: Misskeyのmetaテーブルの固定主キー(単一行)
@@ -228,7 +228,7 @@ func objectStorageJobEnv(assigns []objAssign) []corev1.EnvVar {
 // objectStorageHash: 入力のsha256。Job名(先頭10hex)に使い、入力変化で別Job・旧掃除
 // SQL本文(カラム名/bool/port/NULL構造)+ env平文値 + 資格情報secretのresourceVersion
 // (SQL本文に文字列値は出ないため値変化はここで捕捉。credentialローテも再投入対象)
-func (r *MisskeyReconciler) objectStorageHash(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan, sql string, assigns []objAssign) string {
+func (r *MisskeyReconciler) objectStorageHash(ctx context.Context, m *misskeyv1beta1.Misskey, p plan, sql string, assigns []objAssign) string {
 	h := sha256.New()
 	writePart := func(s string) { h.Write([]byte(s)); h.Write([]byte{0}) }
 	writePart(sql)
@@ -244,7 +244,7 @@ func (r *MisskeyReconciler) objectStorageHash(ctx context.Context, m *misskeyv1a
 }
 
 // credentialSecretVersions: objectStorage資格情報secretのname:resourceVersion(dedup・sort)
-func (r *MisskeyReconciler) credentialSecretVersions(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) []string {
+func (r *MisskeyReconciler) credentialSecretVersions(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) []string {
 	names := map[string]bool{p.objAccessKeySel.Name: true, p.objSecretKeySel.Name: true}
 	out := make([]string, 0, len(names))
 	for name := range names {
@@ -261,7 +261,7 @@ func (r *MisskeyReconciler) credentialSecretVersions(ctx context.Context, m *mis
 
 // reconcileObjectStorage: meta書込Jobを望ましい状態へ収束。完了(Succeeded>=1)を返す
 // 入力変化はJob名(hash)変化で捕捉し旧Jobを掃除。呼び出し側はp.objAutoConfigure時のみ呼ぶ
-func (r *MisskeyReconciler) reconcileObjectStorage(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) (bool, error) {
+func (r *MisskeyReconciler) reconcileObjectStorage(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (bool, error) {
 	assigns, err := objectStorageAssignments(p)
 	if err != nil {
 		return false, err
@@ -308,7 +308,7 @@ func (r *MisskeyReconciler) reconcileObjectStorage(ctx context.Context, m *missk
 }
 
 // cleanupObjectStorageJobs: keep以外のobjstorage Jobを削除。keep=""で全削除(無効化cleanup)
-func (r *MisskeyReconciler) cleanupObjectStorageJobs(ctx context.Context, m *misskeyv1alpha1.Misskey, keep string) error {
+func (r *MisskeyReconciler) cleanupObjectStorageJobs(ctx context.Context, m *misskeyv1beta1.Misskey, keep string) error {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, client.InNamespace(m.Namespace), client.MatchingLabels(selectorFor(m, "objstorage"))); err != nil {
 		return err
@@ -328,7 +328,7 @@ func (r *MisskeyReconciler) cleanupObjectStorageJobs(ctx context.Context, m *mis
 
 // cleanupObjectStorage: objectStorage無効化/autoConfigure=false時のJob+SQL ConfigMap掃除
 // metaは触らない(useObjectStorage=falseは既存S3ファイル配信を壊す破壊的操作のため)
-func (r *MisskeyReconciler) cleanupObjectStorage(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) cleanupObjectStorage(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	if err := r.cleanupObjectStorageJobs(ctx, m, ""); err != nil {
 		return err
 	}
@@ -337,7 +337,7 @@ func (r *MisskeyReconciler) cleanupObjectStorage(ctx context.Context, m *misskey
 }
 
 // buildObjectStorageJob: psqlでmetaへ設定を書き込む使い捨てJob
-func buildObjectStorageJob(m *misskeyv1alpha1.Misskey, p plan, name string, objEnv []corev1.EnvVar) *batchv1.Job {
+func buildObjectStorageJob(m *misskeyv1beta1.Misskey, p plan, name string, objEnv []corev1.EnvVar) *batchv1.Job {
 	// 書込は必ずprimaryへ(pooler/replica迂回)。migratePlanを再利用
 	mp := migratePlan(m, p)
 	env := []corev1.EnvVar{

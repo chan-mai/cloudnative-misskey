@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 var (
@@ -50,18 +50,18 @@ var (
 const recoveryOriginName = "origin"
 
 // poolerEnabled: spec.postgres.poolerが在ればenabled(default true)
-func poolerEnabled(m *misskeyv1alpha1.Misskey) bool {
+func poolerEnabled(m *misskeyv1beta1.Misskey) bool {
 	return m.Spec.Postgres.Pooler != nil
 }
 
 // readOffloadActive: replicaが居る(instances>=2)かつreadOffloadがopt-outされていない
-func readOffloadActive(m *misskeyv1alpha1.Misskey) bool {
+func readOffloadActive(m *misskeyv1beta1.Misskey) bool {
 	return int32OrDefault(m.Spec.Postgres.Instances, 1) >= 2 && boolOr(m.Spec.Postgres.ReadOffload, true)
 }
 
 // managedデータベース用にCNPG Cluster(とScheduledBackup)を作成/更新
 // spec.postgres.external設定時はno-op
-func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	if err := r.applySSA(ctx, m, buildDBCluster(m)); err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func (r *MisskeyReconciler) reconcilePostgres(ctx context.Context, m *misskeyv1a
 }
 
 // backupとrecovery externalClusterで共用するbarman s3Credentials
-func s3CredentialsMap(c *misskeyv1alpha1.S3Credentials) map[string]any {
+func s3CredentialsMap(c *misskeyv1beta1.S3Credentials) map[string]any {
 	return map[string]any{
 		"accessKeyId": map[string]any{
 			"name": c.AccessKeyID.Name,
@@ -90,7 +90,7 @@ func s3CredentialsMap(c *misskeyv1alpha1.S3Credentials) map[string]any {
 // buildDBCluster: CNPG Clusterを組み立てる
 // bootstrapはrecovery設定時にbarmanObjectStoreからの復元、通常はinitdb
 // bootstrapはCNPGがCluster作成時のみ評価するため、recoveryは既存クラスタに対して不活性
-func buildDBCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
+func buildDBCluster(m *misskeyv1beta1.Misskey) *unstructured.Unstructured {
 	pg := m.Spec.Postgres
 	storageSize := quantityOr(pg.Storage, "20Gi")
 
@@ -102,7 +102,7 @@ func buildDBCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
 
 	spec := map[string]any{
 		"instances": int64(int32OrDefault(pg.Instances, 1)),
-		"imageName": stringOr(pg.ImageName, "ghcr.io/cloudnative-pg/postgresql:17"),
+		"imageName": stringOr(pg.Image, "ghcr.io/cloudnative-pg/postgresql:17"),
 		"inheritedMetadata": map[string]any{
 			"labels": inheritedLabels,
 		},
@@ -147,7 +147,7 @@ func buildDBCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
 		// PGroonga全文検索では、init時にアプリケーションDBへ拡張を作成
 		// postgres.imageNameでPGroonga有効イメージが必要。既定イメージだとCNPGのbootstrapが黙らず明示的に失敗する
 		// recovery時は不要(拡張は復元データに含まれる)
-		if m.Spec.Search.Provider == misskeyv1alpha1.SearchSQLPgroonga {
+		if m.Spec.Search.Provider == misskeyv1beta1.SearchSQLPgroonga {
 			initdb["postInitApplicationSQL"] = []any{"CREATE EXTENSION IF NOT EXISTS pgroonga"}
 		}
 		if imp := pg.Import; imp != nil {
@@ -225,7 +225,7 @@ func buildDBCluster(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
 }
 
 // buildDBScheduledBackup: backup.schedule設定時のCNPG ScheduledBackup
-func buildDBScheduledBackup(m *misskeyv1alpha1.Misskey) *unstructured.Unstructured {
+func buildDBScheduledBackup(m *misskeyv1beta1.Misskey) *unstructured.Unstructured {
 	sb := &unstructured.Unstructured{}
 	sb.SetGroupVersionKind(cnpgScheduledBackupGVK)
 	sb.SetName(nameDB(m))
@@ -241,7 +241,7 @@ func buildDBScheduledBackup(m *misskeyv1alpha1.Misskey) *unstructured.Unstructur
 
 // reconcilePoolers: pooler有効時にrw(書込)と、read offload有効時ro(読取)のCNPG Poolerをapply
 // 無効化/instances<2へのdowngrade時は該当プーラーをcleanup
-func (r *MisskeyReconciler) reconcilePoolers(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) reconcilePoolers(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	// rwプーラー: pooler有効時
 	if poolerEnabled(m) {
 		if err := r.applySSA(ctx, m, buildPooler(m, nameDBPoolerRW(m), "rw")); err != nil {
@@ -260,7 +260,7 @@ func (r *MisskeyReconciler) reconcilePoolers(ctx context.Context, m *misskeyv1al
 
 // buildPooler: 指定type(rw/ro)のCNPG Pooler unstructuredを生成
 // 呼び出し側でPooler != nilを保証
-func buildPooler(m *misskeyv1alpha1.Misskey, name, poolerType string) *unstructured.Unstructured {
+func buildPooler(m *misskeyv1beta1.Misskey, name, poolerType string) *unstructured.Unstructured {
 	pc := m.Spec.Postgres.Pooler
 
 	// PgBouncerパラメータ: デフォルトにユーザー指定をmerge
@@ -312,7 +312,7 @@ func buildPooler(m *misskeyv1alpha1.Misskey, name, poolerType string) *unstructu
 }
 
 // deletePooler: 指定名のPoolerが在れば削除(無効化/downgrade時のcleanup)
-func (r *MisskeyReconciler) deletePooler(ctx context.Context, m *misskeyv1alpha1.Misskey, name string) error {
+func (r *MisskeyReconciler) deletePooler(ctx context.Context, m *misskeyv1beta1.Misskey, name string) error {
 	p := &unstructured.Unstructured{}
 	p.SetGroupVersionKind(cnpgPoolerGVK)
 	p.SetName(name)

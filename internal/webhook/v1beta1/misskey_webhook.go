@@ -15,7 +15,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-package v1alpha1
+package v1beta1
 
 import (
 	"context"
@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	"sigs.k8s.io/yaml"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // operatorがdefault.ymlへ出力するトップレベルキー(controller側renderDefaultYMLと同期)
@@ -54,49 +54,49 @@ var reservedConfigKeys = map[string]bool{
 // 表せない項目だけを担当します: tenant未設定→namespaceのdefault(「未設定→初回設定」の
 // 穴を塞ぐ)と、エラーにするほどでない補助的な警告です。
 func SetupMisskeyWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &misskeyv1alpha1.Misskey{}).
+	return ctrl.NewWebhookManagedBy(mgr, &misskeyv1beta1.Misskey{}).
 		WithDefaulter(&MisskeyCustomDefaulter{}).
 		WithValidator(&MisskeyCustomValidator{}).
 		Complete()
 }
 
-// +kubebuilder:webhook:path=/mutate-cloudnative-misskey-dev-v1alpha1-misskey,mutating=true,failurePolicy=fail,sideEffects=None,groups=cloudnative-misskey.dev,resources=misskeys,verbs=create;update,versions=v1alpha1,name=mmisskey-v1alpha1.kb.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/mutate-cloudnative-misskey-dev-v1beta1-misskey,mutating=true,failurePolicy=fail,sideEffects=None,groups=cloudnative-misskey.dev,resources=misskeys,verbs=create;update,versions=v1beta1,name=mmisskey-v1beta1.kb.io,admissionReviewVersions=v1
 
 // MisskeyCustomDefaulter: CRD既定で表せない項目を補完
 type MisskeyCustomDefaulter struct{}
 
-var _ admission.Defaulter[*misskeyv1alpha1.Misskey] = &MisskeyCustomDefaulter{}
+var _ admission.Defaulter[*misskeyv1beta1.Misskey] = &MisskeyCustomDefaulter{}
 
 // Default: tenant未設定はnamespaceで確定。以後CELでimmutableとなり「未設定→初回設定」の穴を塞ぐ
-func (d *MisskeyCustomDefaulter) Default(_ context.Context, m *misskeyv1alpha1.Misskey) error {
+func (d *MisskeyCustomDefaulter) Default(_ context.Context, m *misskeyv1beta1.Misskey) error {
 	if m.Spec.Tenant == "" {
 		m.Spec.Tenant = m.Namespace
 	}
 	return nil
 }
 
-// +kubebuilder:webhook:path=/validate-cloudnative-misskey-dev-v1alpha1-misskey,mutating=false,failurePolicy=fail,sideEffects=None,groups=cloudnative-misskey.dev,resources=misskeys,verbs=create;update,versions=v1alpha1,name=vmisskey-v1alpha1.kb.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-cloudnative-misskey-dev-v1beta1-misskey,mutating=false,failurePolicy=fail,sideEffects=None,groups=cloudnative-misskey.dev,resources=misskeys,verbs=create;update,versions=v1beta1,name=vmisskey-v1beta1.kb.io,admissionReviewVersions=v1
 
 // MisskeyCustomValidator: CELで表せない補助的な警告のみ(エラーはCELが常時強制)
 type MisskeyCustomValidator struct{}
 
-var _ admission.Validator[*misskeyv1alpha1.Misskey] = &MisskeyCustomValidator{}
+var _ admission.Validator[*misskeyv1beta1.Misskey] = &MisskeyCustomValidator{}
 
-func (v *MisskeyCustomValidator) ValidateCreate(_ context.Context, m *misskeyv1alpha1.Misskey) (admission.Warnings, error) {
+func (v *MisskeyCustomValidator) ValidateCreate(_ context.Context, m *misskeyv1beta1.Misskey) (admission.Warnings, error) {
 	return advisoryWarnings(m), nil
 }
 
-func (v *MisskeyCustomValidator) ValidateUpdate(_ context.Context, _, newObj *misskeyv1alpha1.Misskey) (admission.Warnings, error) {
+func (v *MisskeyCustomValidator) ValidateUpdate(_ context.Context, _, newObj *misskeyv1beta1.Misskey) (admission.Warnings, error) {
 	return advisoryWarnings(newObj), nil
 }
 
-func (v *MisskeyCustomValidator) ValidateDelete(_ context.Context, _ *misskeyv1alpha1.Misskey) (admission.Warnings, error) {
+func (v *MisskeyCustomValidator) ValidateDelete(_ context.Context, _ *misskeyv1beta1.Misskey) (admission.Warnings, error) {
 	return nil, nil
 }
 
 // advisoryWarnings: エラーにはしないが利用者に気づかせたい設定を警告として返す
 // (無効値のブロックはCELが拒否するため、ここは「設定はできるが効かない」系のみ)
-func advisoryWarnings(m *misskeyv1alpha1.Misskey) admission.Warnings {
+func advisoryWarnings(m *misskeyv1beta1.Misskey) admission.Warnings {
 	var warns admission.Warnings
 	pg := m.Spec.Postgres
 	if pg.External != nil {
@@ -109,14 +109,13 @@ func advisoryWarnings(m *misskeyv1alpha1.Misskey) admission.Warnings {
 	if m.Spec.Redis.External != nil && m.Spec.Redis.Roles != nil {
 		warns = append(warns, "spec.redis.roles is ignored while redis.external is set")
 	}
-	if m.Spec.Search.Provider == misskeyv1alpha1.SearchSQLPgroonga && pg.External == nil && pg.ImageName == "" {
-		warns = append(warns, "search.provider=sqlPgroonga requires postgres.imageName with the PGroonga extension")
+	if m.Spec.Search.Provider == misskeyv1beta1.SearchSQLPgroonga && pg.External == nil && pg.Image == "" {
+		warns = append(warns, "search.provider=sqlPgroonga requires postgres.image with the PGroonga extension")
 	}
 	if pg.Recovery != nil || pg.Import != nil {
-		warns = append(warns, "spec.postgres.recovery/import restores an existing database: keep spec.url and spec.idGenerationMethod identical to the source instance, and use a postgres.imageName compatible with the source's PostgreSQL major version and installed extensions")
+		warns = append(warns, "spec.postgres.recovery/import restores an existing database: keep spec.url and spec.idGenerationMethod identical to the source instance, and use a postgres.image compatible with the source's PostgreSQL major version and installed extensions")
 	}
-	rpsSet := (m.Spec.App.Autoscaling != nil && m.Spec.App.Autoscaling.RPS != nil) ||
-		(m.Spec.Worker.Autoscaling != nil && m.Spec.Worker.Autoscaling.RPS != nil)
+	rpsSet := m.Spec.App.Autoscaling != nil && m.Spec.App.Autoscaling.RPS != nil
 	if rpsSet && (m.Spec.Monitoring.Enabled == nil || !*m.Spec.Monitoring.Enabled) {
 		warns = append(warns, "autoscaling.rps needs monitoring.enabled so the proxy metrics port is exposed and scraped")
 	}

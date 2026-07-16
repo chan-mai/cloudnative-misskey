@@ -30,7 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 const misskeyFinalizer = "cloudnative-misskey.dev/finalizer"
@@ -46,7 +46,7 @@ type retainTarget struct {
 }
 
 // reconcileDelete: deletionPolicy=Retainならデータ資源をorphan化してからfinalizerを外す
-func (r *MisskeyReconciler) reconcileDelete(ctx context.Context, m *misskeyv1alpha1.Misskey) (ctrl.Result, error) {
+func (r *MisskeyReconciler) reconcileDelete(ctx context.Context, m *misskeyv1beta1.Misskey) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(m, misskeyFinalizer) {
 		return ctrl.Result{}, nil
 	}
@@ -62,7 +62,7 @@ func (r *MisskeyReconciler) reconcileDelete(ctx context.Context, m *misskeyv1alp
 
 // retainData: CR削除でデータが消えないよう、stateful資源とkey secretのownerRefを外す
 // 同名CR再作成でSSA/CreateOrUpdateが再adoptしデータ込みで復帰する
-func (r *MisskeyReconciler) retainData(ctx context.Context, m *misskeyv1alpha1.Misskey) error {
+func (r *MisskeyReconciler) retainData(ctx context.Context, m *misskeyv1beta1.Misskey) error {
 	targets := []retainTarget{
 		{cnpgClusterGVK, nameDB(m)},    // DB(削除するとCNPGがPVCごと消す最大の消失点)
 		{statefulSetGVK, nameMeili(m)}, // meili STS(継続稼働)
@@ -90,7 +90,7 @@ func (r *MisskeyReconciler) retainData(ctx context.Context, m *misskeyv1alpha1.M
 
 // orphan: 対象のownerReferencesから当該Misskey(UID一致)を除去してGC対象から外す
 // 不在(NotFound)・CRD未導入(NoMatch)は無視
-func (r *MisskeyReconciler) orphan(ctx context.Context, m *misskeyv1alpha1.Misskey, gvk schema.GroupVersionKind, name string) error {
+func (r *MisskeyReconciler) orphan(ctx context.Context, m *misskeyv1beta1.Misskey, gvk schema.GroupVersionKind, name string) error {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(gvk)
 	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: m.Namespace}, u); err != nil {

@@ -1,6 +1,6 @@
 # Full instance: one CR provisions app + worker + proxy + Redis + MeiliSearch +
 # a CNPG PostgreSQL cluster + Ingress. MeiliSearch is the default search backend.
-apiVersion: cloudnative-misskey.dev/v1alpha1
+apiVersion: cloudnative-misskey.dev/v1beta1
 kind: Misskey
 metadata:
   name: example

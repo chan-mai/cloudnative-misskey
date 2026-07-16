@@ -30,13 +30,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // resumeReplicas: suspend解除直後のautoscaling再点火を含むreplicas決定
 func TestResumeReplicas(t *testing.T) {
-	auto := func(min *int32) *misskeyv1alpha1.AutoscalingSpec {
-		return &misskeyv1alpha1.AutoscalingSpec{MinReplicas: min, MaxReplicas: 5}
+	auto := func(min *int32) *scaleConfig {
+		return workerScaleConfig(&misskeyv1beta1.WorkerAutoscalingSpec{
+			AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MinReplicas: min, MaxReplicas: 5},
+		})
 	}
 	existing := func(replicas int32) *appsv1.Deployment {
 		return &appsv1.Deployment{
@@ -46,18 +48,19 @@ func TestResumeReplicas(t *testing.T) {
 	}
 	cases := []struct {
 		name string
-		comp misskeyv1alpha1.ComponentSpec
+		comp misskeyv1beta1.ComponentSpec
+		sc   *scaleConfig
 		dep  *appsv1.Deployment
 		want *int32
 	}{
-		{"static", misskeyv1alpha1.ComponentSpec{Replicas: int32Ptr(3)}, existing(0), int32Ptr(3)},
-		{"autoscaling+new", misskeyv1alpha1.ComponentSpec{Autoscaling: auto(nil)}, &appsv1.Deployment{}, nil},
-		{"autoscaling+running", misskeyv1alpha1.ComponentSpec{Autoscaling: auto(nil)}, existing(2), nil},
-		{"autoscaling+after suspend", misskeyv1alpha1.ComponentSpec{Autoscaling: auto(nil)}, existing(0), int32Ptr(1)},
-		{"autoscaling+after suspend+minReplicas", misskeyv1alpha1.ComponentSpec{Autoscaling: auto(int32Ptr(2))}, existing(0), int32Ptr(2)},
+		{"static", misskeyv1beta1.ComponentSpec{Replicas: int32Ptr(3)}, nil, existing(0), int32Ptr(3)},
+		{"autoscaling+new", misskeyv1beta1.ComponentSpec{}, auto(nil), &appsv1.Deployment{}, nil},
+		{"autoscaling+running", misskeyv1beta1.ComponentSpec{}, auto(nil), existing(2), nil},
+		{"autoscaling+after suspend", misskeyv1beta1.ComponentSpec{}, auto(nil), existing(0), int32Ptr(1)},
+		{"autoscaling+after suspend+minReplicas", misskeyv1beta1.ComponentSpec{}, auto(int32Ptr(2)), existing(0), int32Ptr(2)},
 	}
 	for _, tc := range cases {
-		got := resumeReplicas(tc.comp, tc.dep)
+		got := resumeReplicas(tc.comp, tc.sc, tc.dep)
 		switch {
 		case tc.want == nil && got != nil:
 			t.Errorf("%s: got %d, want nil", tc.name, *got)
@@ -69,7 +72,7 @@ func TestResumeReplicas(t *testing.T) {
 
 func TestPoolerIgnoreStartupParameters(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{}
 	u := buildPooler(m, nameDBPoolerRW(m), "rw")
 	params, _, _ := unstructured.NestedStringMap(u.Object, "spec", "pgbouncer", "parameters")
 	// transaction pooling下でMisskeyのstatement_timeoutを無視しないと接続失敗する回帰防止
@@ -78,10 +81,10 @@ func TestPoolerIgnoreStartupParameters(t *testing.T) {
 	}
 }
 
-func newMisskey() *misskeyv1alpha1.Misskey {
-	return &misskeyv1alpha1.Misskey{
+func newMisskey() *misskeyv1beta1.Misskey {
+	return &misskeyv1beta1.Misskey{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "ns"},
-		Spec: misskeyv1alpha1.MisskeySpec{
+		Spec: misskeyv1beta1.MisskeySpec{
 			URL:   "https://misskey.example.com/",
 			Image: "misskey/misskey:2026.6.0",
 		},
@@ -145,14 +148,14 @@ func TestResolveManaged(t *testing.T) {
 
 func TestResolveExternal(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Postgres.External = &misskeyv1alpha1.ExternalPostgres{
+	m.Spec.Postgres.External = &misskeyv1beta1.ExternalPostgres{
 		Host: "pg.db.svc", Port: 6543, Database: "d", User: "u",
 		PasswordSecret: corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw",
 		},
 	}
-	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.svc"}
-	m.Spec.Search.Meilisearch.External = &misskeyv1alpha1.ExternalMeilisearch{
+	m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.svc"}
+	m.Spec.Search.Meilisearch.External = &misskeyv1beta1.ExternalMeilisearch{
 		Host: "meili.svc", SSL: true,
 		APIKeySecret: corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "meilisec"}, Key: "k",
@@ -177,13 +180,13 @@ func TestResolveExternal(t *testing.T) {
 	}
 }
 
-func objStorageSpec() *misskeyv1alpha1.ObjectStorageSpec {
-	return &misskeyv1alpha1.ObjectStorageSpec{
+func objStorageSpec() *misskeyv1beta1.ObjectStorageSpec {
+	return &misskeyv1beta1.ObjectStorageSpec{
 		Bucket:   "media",
 		Endpoint: "acct.r2.cloudflarestorage.com",
 		Region:   "auto",
 		BaseURL:  "https://cdn.example.com",
-		Credentials: misskeyv1alpha1.S3Credentials{
+		Credentials: misskeyv1beta1.S3Credentials{
 			AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "ak"},
 			SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "sk"},
 		},
@@ -240,7 +243,7 @@ func TestResolveObjectStorage(t *testing.T) {
 	// columnNames override
 	m3 := newMisskey()
 	m3.Spec.ObjectStorage = objStorageSpec()
-	m3.Spec.ObjectStorage.ColumnNames = &misskeyv1alpha1.ObjectStorageColumns{Bucket: "s3_bucket", SecretKey: "s3_secret"}
+	m3.Spec.ObjectStorage.ColumnNames = &misskeyv1beta1.ObjectStorageColumns{Bucket: "s3_bucket", SecretKey: "s3_secret"}
 	p3 := resolve(m3)
 	if p3.objColumns["bucket"] != "s3_bucket" || p3.objColumns["secretKey"] != "s3_secret" {
 		t.Errorf("column override not applied: %+v", p3.objColumns)
@@ -316,7 +319,7 @@ func TestObjectStorageJobEnv(t *testing.T) {
 func TestObjectStorageColumnOverrideAndExtra(t *testing.T) {
 	m := newMisskey()
 	os := objStorageSpec()
-	os.ColumnNames = &misskeyv1alpha1.ObjectStorageColumns{Bucket: "s3_bucket"}
+	os.ColumnNames = &misskeyv1beta1.ObjectStorageColumns{Bucket: "s3_bucket"}
 	os.ExtraColumns = map[string]string{"objectStorageSomethingNew": "v"}
 	m.Spec.ObjectStorage = os
 	assigns, err := objectStorageAssignments(resolve(m))
@@ -336,7 +339,7 @@ func TestObjectStorageIdentifierSafety(t *testing.T) {
 	// 不正なoverrideカラム名はreject
 	m := newMisskey()
 	os := objStorageSpec()
-	os.ColumnNames = &misskeyv1alpha1.ObjectStorageColumns{Bucket: `bucket"; DROP TABLE meta; --`}
+	os.ColumnNames = &misskeyv1beta1.ObjectStorageColumns{Bucket: `bucket"; DROP TABLE meta; --`}
 	m.Spec.ObjectStorage = os
 	if _, err := objectStorageAssignments(resolve(m)); err == nil {
 		t.Error("malicious column name must be rejected")
@@ -354,7 +357,7 @@ func TestObjectStorageIdentifierSafety(t *testing.T) {
 
 func TestResolveProviderSQLLike(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLLike
+	m.Spec.Search.Provider = misskeyv1beta1.SearchSQLLike
 	p := resolve(m)
 	if p.meiliEnabled {
 		t.Errorf("sqlLike should not enable meilisearch")
@@ -364,7 +367,7 @@ func TestResolveProviderSQLLike(t *testing.T) {
 func TestResolveSetupPassword(t *testing.T) {
 	// managed(生成)
 	m := newMisskey()
-	m.Spec.SetupPassword = &misskeyv1alpha1.SetupPasswordSpec{}
+	m.Spec.SetupPassword = &misskeyv1beta1.SetupPasswordSpec{}
 	p := resolve(m)
 	if !p.setupEnabled || !p.setupManaged || p.setupSel.Name != "example-setup" || p.setupSel.Key != setupPasswordID {
 		t.Errorf("managed setup password wrong: %+v", p.setupSel)
@@ -372,7 +375,7 @@ func TestResolveSetupPassword(t *testing.T) {
 
 	// external secretRefの場合
 	m2 := newMisskey()
-	m2.Spec.SetupPassword = &misskeyv1alpha1.SetupPasswordSpec{
+	m2.Spec.SetupPassword = &misskeyv1beta1.SetupPasswordSpec{
 		SecretRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "mysetup"}, Key: "SETUP",
 		},
@@ -385,7 +388,7 @@ func TestResolveSetupPassword(t *testing.T) {
 
 func TestRenderDefaultYMLMeilisearch(t *testing.T) {
 	m := newMisskey()
-	m.Spec.SetupPassword = &misskeyv1alpha1.SetupPasswordSpec{}
+	m.Spec.SetupPassword = &misskeyv1beta1.SetupPasswordSpec{}
 	m.Spec.ExtraConfig = "maxFileSize: 100"
 	out := renderDefaultYML(m, resolve(m))
 
@@ -416,7 +419,7 @@ func TestRenderDefaultYMLMeilisearch(t *testing.T) {
 
 func TestRenderDefaultYMLSQLLike(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLPgroonga
+	m.Spec.Search.Provider = misskeyv1beta1.SearchSQLPgroonga
 	out := renderDefaultYML(m, resolve(m))
 	if !strings.Contains(out, "provider: sqlPgroonga") {
 		t.Errorf("expected sqlPgroonga provider")
@@ -428,7 +431,7 @@ func TestRenderDefaultYMLSQLLike(t *testing.T) {
 
 func TestRenderDefaultYMLPerformanceProxyFiles(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Performance = misskeyv1alpha1.PerformanceSpec{
+	m.Spec.Performance = misskeyv1beta1.PerformanceSpec{
 		DeliverJobConcurrency: int32Ptr(64),
 		InboxJobConcurrency:   int32Ptr(32),
 		DeliverJobPerSec:      int32Ptr(128),
@@ -437,11 +440,11 @@ func TestRenderDefaultYMLPerformanceProxyFiles(t *testing.T) {
 		DeliverJobMaxAttempts: int32Ptr(10),
 		InboxJobMaxAttempts:   int32Ptr(8),
 	}
-	m.Spec.OutboundProxy = misskeyv1alpha1.OutboundProxySpec{
+	m.Spec.OutboundProxy = misskeyv1beta1.OutboundProxySpec{
 		HTTP: "http://proxy:3128", SMTP: "http://proxy:3128",
 		BypassHosts: []string{"hcaptcha.com", "challenges.cloudflare.com"},
 	}
-	m.Spec.Files = misskeyv1alpha1.FilesSpec{
+	m.Spec.Files = misskeyv1beta1.FilesSpec{
 		MaxFileSize:      int64Ptr(262144000),
 		MediaProxy:       "https://mp.example.com/proxy",
 		ProxyRemoteFiles: boolPtr(false),
@@ -641,7 +644,7 @@ func TestRuntimeOverrides(t *testing.T) {
 	uid := int64(1000)
 	empty := ""
 	m := newMisskey()
-	m.Spec.Runtime = misskeyv1alpha1.RuntimeSpec{
+	m.Spec.Runtime = misskeyv1beta1.RuntimeSpec{
 		RunAsUser:      &uid,
 		StartCommand:   []string{"node", "start.js"},
 		MigrateCommand: []string{"node", "migrate.js"},
@@ -692,7 +695,7 @@ func TestBuildPodSpecRuntime(t *testing.T) {
 	p := resolve(m)
 
 	// default: uid 991、start command、config/builtマウント、prepare-built init有り
-	spec := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)
+	spec := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App.ComponentSpec)
 	if spec.SecurityContext.RunAsUser == nil || *spec.SecurityContext.RunAsUser != 991 {
 		t.Error("default uid != 991")
 	}
@@ -713,7 +716,7 @@ func TestBuildPodSpecRuntime(t *testing.T) {
 	// builtPath="" → built mount/prepare-built無し
 	empty := ""
 	m.Spec.Runtime.BuiltPath = &empty
-	spec = buildMisskeyPodSpec(m, p, roleApp, m.Spec.App)
+	spec = buildMisskeyPodSpec(m, p, roleApp, m.Spec.App.ComponentSpec)
 	if hasMount(spec.Containers[0].VolumeMounts, "/misskey/built") {
 		t.Error("built mount remains with empty builtPath")
 	}
@@ -761,7 +764,7 @@ func TestResolvePoolerHosts(t *testing.T) {
 	// pooler有効: writeはrwプーラー、readはroプーラーへ
 	m := newMisskey()
 	m.Spec.Postgres.Instances = 2
-	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{}
 	p := resolve(m)
 	if p.dbHost != "example-db-pooler-rw" {
 		t.Errorf("write host should be rw pooler: %q", p.dbHost)
@@ -774,7 +777,7 @@ func TestResolvePoolerHosts(t *testing.T) {
 func TestResolvePoolerNoOffload(t *testing.T) {
 	// pooler有効・instances=1: writeはrwプーラー、read offloadはしない(roプーラー不要)
 	m := newMisskey()
-	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{}
 	p := resolve(m)
 	if p.dbHost != "example-db-pooler-rw" {
 		t.Errorf("write host should be rw pooler: %q", p.dbHost)
@@ -803,7 +806,7 @@ func TestMigratePlanPrimaryDirect(t *testing.T) {
 	// pooler+offload構成でも、migrationはprimary(-rw)直結・no-replication
 	m := newMisskey()
 	m.Spec.Postgres.Instances = 2
-	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{}
 	mp := migratePlan(m, resolve(m))
 	if mp.dbHost != "example-db-rw" {
 		t.Errorf("migration must bypass pooler to -rw: %q", mp.dbHost)
@@ -819,7 +822,7 @@ func TestMigratePlanPrimaryDirect(t *testing.T) {
 
 func TestBuildPooler(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{
+	m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{
 		Instances:  3,
 		Parameters: map[string]string{"default_pool_size": "50"},
 	}
@@ -854,13 +857,13 @@ func TestBuildPooler(t *testing.T) {
 }
 
 // recovery付きfixture
-func withRecovery(m *misskeyv1alpha1.Misskey) *misskeyv1alpha1.Misskey {
-	m.Spec.Postgres.Recovery = &misskeyv1alpha1.PostgresRecovery{
-		Source: misskeyv1alpha1.RecoverySource{
+func withRecovery(m *misskeyv1beta1.Misskey) *misskeyv1beta1.Misskey {
+	m.Spec.Postgres.Recovery = &misskeyv1beta1.PostgresRecovery{
+		Source: misskeyv1beta1.RecoverySource{
 			DestinationPath: "s3://bk/misskey",
 			EndpointURL:     "https://s3.example.com",
 			ServerName:      "old-db",
-			S3Credentials: &misskeyv1alpha1.S3Credentials{
+			S3Credentials: &misskeyv1beta1.S3Credentials{
 				AccessKeyID:     corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "id"},
 				SecretAccessKey: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "s3"}, Key: "secret"},
 			},
@@ -897,7 +900,7 @@ func TestBuildDBClusterInitdbDefaults(t *testing.T) {
 
 func TestBuildDBClusterPgroongaInitdb(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLPgroonga
+	m.Spec.Search.Provider = misskeyv1beta1.SearchSQLPgroonga
 	spec := buildDBCluster(m).Object["spec"].(map[string]any)
 	initdb := spec["bootstrap"].(map[string]any)["initdb"].(map[string]any)
 	sqls, ok := initdb["postInitApplicationSQL"].([]any)
@@ -939,7 +942,7 @@ func TestBuildDBClusterRecovery(t *testing.T) {
 
 func TestBuildDBClusterRecoveryPgroonga(t *testing.T) {
 	m := withRecovery(newMisskey())
-	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLPgroonga
+	m.Spec.Search.Provider = misskeyv1beta1.SearchSQLPgroonga
 	spec := buildDBCluster(m).Object["spec"].(map[string]any)
 	// recovery時は出力しない(拡張は復元データに含まれる)
 	if strings.Contains(fmt.Sprintf("%v", spec), "postInitApplicationSQL") {
@@ -959,7 +962,7 @@ func TestBuildDBClusterRecoveryTargetTime(t *testing.T) {
 
 func TestBuildDBClusterBackupServerName(t *testing.T) {
 	m := withRecovery(newMisskey())
-	m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{
+	m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{
 		DestinationPath: "s3://bk/misskey",
 		ServerName:      "example-db-restored",
 	}
@@ -983,8 +986,8 @@ func TestBuildDBClusterBackupServerName(t *testing.T) {
 
 func TestBuildDBClusterImport(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Search.Provider = misskeyv1alpha1.SearchSQLPgroonga
-	m.Spec.Postgres.Import = &misskeyv1alpha1.PostgresImport{Source: misskeyv1alpha1.ImportSource{
+	m.Spec.Search.Provider = misskeyv1beta1.SearchSQLPgroonga
+	m.Spec.Postgres.Import = &misskeyv1beta1.PostgresImport{Source: misskeyv1beta1.ImportSource{
 		Host: "old-pg", Database: "misskey0", User: "mk",
 		PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "srcpw"}, Key: "pw"},
 	}}
@@ -1052,19 +1055,19 @@ func TestPreMigrationBackupGate(t *testing.T) {
 	// 無効/バックアップ未設定/external DBはno-opでgate通過(clientに触れない)
 	cases := []struct {
 		name string
-		m    *misskeyv1alpha1.Misskey
+		m    *misskeyv1beta1.Misskey
 		p    plan
 	}{
 		{"preBackup disabled", newMisskey(), plan{dbManaged: true}},
-		{"backup unset", func() *misskeyv1alpha1.Misskey {
+		{"backup unset", func() *misskeyv1beta1.Misskey {
 			m := newMisskey()
 			m.Spec.Migration.PreBackup = boolPtr(true)
 			return m
 		}(), plan{dbManaged: true}},
-		{"external DB", func() *misskeyv1alpha1.Misskey {
+		{"external DB", func() *misskeyv1beta1.Misskey {
 			m := newMisskey()
 			m.Spec.Migration.PreBackup = boolPtr(true)
-			m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://b"}
+			m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://b"}
 			return m
 		}(), plan{dbManaged: false}},
 	}
@@ -1078,10 +1081,10 @@ func TestPreMigrationBackupGate(t *testing.T) {
 
 func TestBuildDBVerifyCluster(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{
+	m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{
 		DestinationPath: "s3://bk/misskey",
 		EndpointURL:     "https://s3.example.com",
-		Verify:          &misskeyv1alpha1.BackupVerify{},
+		Verify:          &misskeyv1beta1.BackupVerify{},
 	}
 	vc := buildDBVerifyCluster(m)
 
@@ -1123,7 +1126,7 @@ func TestBackupVerifyDue(t *testing.T) {
 	if !backupVerifyDue(m, time.Hour, now.Time) {
 		t.Error("first run should be immediately due")
 	}
-	m.Status.BackupVerification = &misskeyv1alpha1.BackupVerificationStatus{LastVerifiedTime: now}
+	m.Status.BackupVerification = &misskeyv1beta1.BackupVerificationStatus{LastVerifiedTime: now}
 	if backupVerifyDue(m, time.Hour, now.Add(30*time.Minute)) {
 		t.Error("due before interval elapsed")
 	}
@@ -1140,7 +1143,7 @@ func TestIngressAnnotationsIssuerRef(t *testing.T) {
 		t.Errorf("default annotations: %+v", ann)
 	}
 	// ClusterIssuer(既定kind)
-	m.Spec.Ingress.IssuerRef = &misskeyv1alpha1.IngressIssuerRef{Name: "letsencrypt"}
+	m.Spec.Ingress.IssuerRef = &misskeyv1beta1.IngressIssuerRef{Name: "letsencrypt"}
 	ann = ingressAnnotations(m, "nginx")
 	if ann["cert-manager.io/cluster-issuer"] != "letsencrypt" {
 		t.Errorf("cluster-issuer annotation: %+v", ann)
@@ -1276,13 +1279,13 @@ func TestChannelBucket(t *testing.T) {
 
 func TestChannelImageFor(t *testing.T) {
 	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
-	ch := func(mutate func(*misskeyv1alpha1.MisskeyChannel)) *misskeyv1alpha1.MisskeyChannel {
-		c := &misskeyv1alpha1.MisskeyChannel{
-			Spec: misskeyv1alpha1.MisskeyChannelSpec{
+	ch := func(mutate func(*misskeyv1beta1.MisskeyChannel)) *misskeyv1beta1.MisskeyChannel {
+		c := &misskeyv1beta1.MisskeyChannel{
+			Spec: misskeyv1beta1.MisskeyChannelSpec{
 				Image:   "v2",
-				Rollout: &misskeyv1alpha1.ChannelRollout{BatchPercent: 20, Interval: metav1.Duration{Duration: time.Hour}},
+				Rollout: &misskeyv1beta1.ChannelRollout{BatchPercent: 20, Interval: metav1.Duration{Duration: time.Hour}},
 			},
-			Status: misskeyv1alpha1.MisskeyChannelStatus{
+			Status: misskeyv1beta1.MisskeyChannelStatus{
 				Image: "v2", PreviousImage: "v1", ImageChangedAt: metav1.NewTime(now),
 			},
 		}
@@ -1293,17 +1296,17 @@ func TestChannelImageFor(t *testing.T) {
 	}
 
 	// status未反映のbootstrapはspec直
-	c := ch(func(c *misskeyv1alpha1.MisskeyChannel) { c.Status = misskeyv1alpha1.MisskeyChannelStatus{} })
+	c := ch(func(c *misskeyv1beta1.MisskeyChannel) { c.Status = misskeyv1beta1.MisskeyChannelStatus{} })
 	if got := channelImageFor(c, 99, now); got != "v2" {
 		t.Errorf("bootstrap: %s", got)
 	}
 	// rollout未設定は即時全量
-	c = ch(func(c *misskeyv1alpha1.MisskeyChannel) { c.Spec.Rollout = nil })
+	c = ch(func(c *misskeyv1beta1.MisskeyChannel) { c.Spec.Rollout = nil })
 	if got := channelImageFor(c, 99, now); got != "v2" {
 		t.Errorf("no rollout: %s", got)
 	}
 	// previous無しは即時全量
-	c = ch(func(c *misskeyv1alpha1.MisskeyChannel) { c.Status.PreviousImage = "" })
+	c = ch(func(c *misskeyv1beta1.MisskeyChannel) { c.Status.PreviousImage = "" })
 	if got := channelImageFor(c, 99, now); got != "v2" {
 		t.Errorf("no previous: %s", got)
 	}
@@ -1330,10 +1333,10 @@ func TestChannelImageFor(t *testing.T) {
 
 func TestBuildScaledObjectRPS(t *testing.T) {
 	m := newMisskey()
-	a := &misskeyv1alpha1.AutoscalingSpec{
-		MaxReplicas: 5,
-		RPS:         &misskeyv1alpha1.RPSTrigger{ServerAddress: "http://prom:9090", TargetRPS: 50},
-	}
+	a := appScaleConfig(&misskeyv1beta1.AppAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 5},
+		RPS:             &misskeyv1beta1.RPSTrigger{ServerAddress: "http://prom:9090", TargetRPS: 50},
+	})
 	if !autoscalingUsesKEDA(a) {
 		t.Fatal("rps setting should take the KEDA path")
 	}
@@ -1359,7 +1362,7 @@ func TestBuildScaledObjectRPS(t *testing.T) {
 	}
 
 	// query上書き + cpu floor併存
-	a.RPS.Query = "sum(custom_metric)"
+	a.rps.Query = "sum(custom_metric)"
 	a.TargetCPUUtilizationPercentage = int32Ptr(70)
 	triggers = buildScaledObject(m, roleApp, nameApp(m), a, redisEndpoint{}).Object["spec"].(map[string]any)["triggers"].([]any)
 	if len(triggers) != 2 {
@@ -1375,7 +1378,7 @@ func TestBuildScaledObjectRPS(t *testing.T) {
 
 func TestBuildPrometheusRule(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{DestinationPath: "s3://bk/misskey"}
+	m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{DestinationPath: "s3://bk/misskey"}
 	rule := buildPrometheusRule(m)
 
 	if rule.GetName() != "example-alerts" || rule.GetKind() != "PrometheusRule" {
@@ -1412,7 +1415,7 @@ func TestBuildPrometheusRule(t *testing.T) {
 
 func TestBuildDBScheduledBackup(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Postgres.Backup = &misskeyv1alpha1.PostgresBackup{
+	m.Spec.Postgres.Backup = &misskeyv1beta1.PostgresBackup{
 		DestinationPath: "s3://bk/misskey",
 		Schedule:        "0 0 3 * * *",
 	}
@@ -1435,7 +1438,7 @@ func TestPoolerHelpers(t *testing.T) {
 		t.Error("pooler unset should be disabled")
 	}
 	// ポインタ存在=有効(内側Enabledは廃止)
-	m.Spec.Postgres.Pooler = &misskeyv1alpha1.PostgresPooler{}
+	m.Spec.Postgres.Pooler = &misskeyv1beta1.PostgresPooler{}
 	if !poolerEnabled(m) {
 		t.Error("pooler block present should be enabled")
 	}
@@ -1444,7 +1447,7 @@ func TestPoolerHelpers(t *testing.T) {
 func TestRedisHAAuth(t *testing.T) {
 	// HA redis: requirepass secret参照 + passEnv
 	m := newMisskey()
-	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	m.Spec.Redis.HA = &misskeyv1beta1.RedisHA{}
 	ep := resolve(m).redisDefault
 	if ep.passSel == nil || ep.passSel.Name != "example-redis-auth" || ep.passSel.Key != "password" {
 		t.Errorf("HA redis must carry requirepass secret ref: %+v", ep.passSel)
@@ -1459,7 +1462,7 @@ func TestRedisHAAuth(t *testing.T) {
 	}
 	// role HA: role別passEnv
 	m2 := newMisskey()
-	m2.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{HA: &misskeyv1alpha1.RedisHA{}}}
+	m2.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{JobQueue: &misskeyv1beta1.RedisRole{HA: &misskeyv1beta1.RedisHA{}}}
 	epr := resolve(m2).redisRoles["jobQueue"]
 	if epr.passSel == nil || epr.passEnv != "REDIS_PASSWORD_JOBQUEUE" {
 		t.Errorf("role HA auth wrong: sel=%+v env=%q", epr.passSel, epr.passEnv)
@@ -1498,7 +1501,7 @@ func TestResolveRedisRoleFallback(t *testing.T) {
 
 func TestResolveRedisRoleManaged(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{}}
+	m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{JobQueue: &misskeyv1beta1.RedisRole{}}
 	p := resolve(m)
 	ep, ok := p.redisRoles["jobQueue"]
 	if !ok || !ep.managed || ep.host != "example-redis-jobqueue" {
@@ -1511,8 +1514,8 @@ func TestResolveRedisRoleManaged(t *testing.T) {
 
 func TestResolveRedisRoleExternal(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{
-		Pubsub: &misskeyv1alpha1.RedisRole{External: &misskeyv1alpha1.ExternalRedis{
+	m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{
+		Pubsub: &misskeyv1beta1.RedisRole{External: &misskeyv1beta1.ExternalRedis{
 			Host: "pubsub.redis.svc",
 			PasswordSecret: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "ps"}, Key: "pw",
@@ -1527,7 +1530,7 @@ func TestResolveRedisRoleExternal(t *testing.T) {
 
 func TestResolveRedisHADefault(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	m.Spec.Redis.HA = &misskeyv1beta1.RedisHA{}
 	ep := resolve(m).redisDefault
 	if !ep.managed || !ep.ha || ep.masterName != "mymaster" {
 		t.Errorf("HA default endpoint wrong: %+v", ep)
@@ -1551,11 +1554,11 @@ func TestRenderRedisBlockSentinel(t *testing.T) {
 
 func TestRenderDefaultYMLRedisRolesAndHA(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	m.Spec.Redis.HA = &misskeyv1beta1.RedisHA{}
 	// role単位で独立: jobQueueは自分のhaでHA、pubsubはha無しでstandalone
-	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{
-		JobQueue: &misskeyv1alpha1.RedisRole{HA: &misskeyv1alpha1.RedisHA{}},
-		Pubsub:   &misskeyv1alpha1.RedisRole{},
+	m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{
+		JobQueue: &misskeyv1beta1.RedisRole{HA: &misskeyv1beta1.RedisHA{}},
+		Pubsub:   &misskeyv1beta1.RedisRole{},
 	}
 	out := renderDefaultYML(m, resolve(m))
 	// default redisとjobQueueはHA sentinel、pubsubはstandalone(sentinelなし)
@@ -1571,9 +1574,9 @@ func TestRenderDefaultYMLRedisRolesAndHA(t *testing.T) {
 
 func TestManagedRedisInstances(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{
-		JobQueue: &misskeyv1alpha1.RedisRole{},
-		Pubsub:   &misskeyv1alpha1.RedisRole{External: &misskeyv1alpha1.ExternalRedis{Host: "x"}},
+	m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{
+		JobQueue: &misskeyv1beta1.RedisRole{},
+		Pubsub:   &misskeyv1beta1.RedisRole{External: &misskeyv1beta1.ExternalRedis{Host: "x"}},
 	}
 	insts := managedRedisInstances(m)
 	// default + jobQueue(managed)。pubsubはexternalで除外
@@ -1586,7 +1589,7 @@ func TestManagedRedisInstances(t *testing.T) {
 	}
 }
 
-func redisInstanceBySuffix(m *misskeyv1alpha1.Misskey, suffix string) redisManagedInstance {
+func redisInstanceBySuffix(m *misskeyv1beta1.Misskey, suffix string) redisManagedInstance {
 	for _, i := range managedRedisInstances(m) {
 		if i.suffix == suffix {
 			return i
@@ -1597,7 +1600,7 @@ func redisInstanceBySuffix(m *misskeyv1alpha1.Misskey, suffix string) redisManag
 
 func TestBuildRedisReplicationAndSentinel(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{Replicas: 5, Sentinels: 3}
+	m.Spec.Redis.HA = &misskeyv1beta1.RedisHA{Replicas: 5, Sentinels: 3}
 	inst := redisInstanceBySuffix(m, "")
 
 	repl := buildRedisReplication(m, inst)
@@ -1638,7 +1641,7 @@ func TestRedisEgressRule(t *testing.T) {
 	if redisEgressRule(m) != nil {
 		t.Error("no HA → redisEgressRule nil")
 	}
-	m.Spec.Redis.HA = &misskeyv1alpha1.RedisHA{}
+	m.Spec.Redis.HA = &misskeyv1beta1.RedisHA{}
 	rr := redisEgressRule(m)
 	if rr == nil || rr.To[0].PodSelector == nil {
 		t.Fatalf("HA → egress rule expected: %+v", rr)
@@ -1701,7 +1704,7 @@ func TestMigrationConcurrentOptIn(t *testing.T) {
 	}
 	// app/workerには付かない(migration専用)
 	for _, role := range []string{roleApp, roleWorker} {
-		spec := buildMisskeyPodSpec(m, resolve(m), role, m.Spec.App)
+		spec := buildMisskeyPodSpec(m, resolve(m), role, m.Spec.App.ComponentSpec)
 		if envHasName(spec.Containers[0].Env, "MISSKEY_MIGRATION_CREATE_INDEX_CONCURRENTLY") {
 			t.Errorf("%s must not carry the migration concurrency env", role)
 		}
@@ -1713,31 +1716,42 @@ func TestAutoscalingHelpers(t *testing.T) {
 		t.Error("nil autoscaling must be disabled")
 	}
 	// ポインタ存在=有効(内側Enabledは廃止)
-	a := &misskeyv1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	a := workerScaleConfig(&misskeyv1beta1.WorkerAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 5},
+	})
 	if !autoscalingEnabled(a) {
 		t.Error("present block is enabled")
 	}
-	if autoscalingUsesKEDA(&misskeyv1alpha1.AutoscalingSpec{MaxReplicas: 5}) {
+	if autoscalingUsesKEDA(a) {
 		t.Error("no queues → native HPA")
 	}
-	if !autoscalingUsesKEDA(&misskeyv1alpha1.AutoscalingSpec{Queues: []misskeyv1alpha1.QueueScaleTrigger{{Name: "deliver", ListLength: 1}}}) {
+	if !autoscalingUsesKEDA(workerScaleConfig(&misskeyv1beta1.WorkerAutoscalingSpec{
+		Queues: []misskeyv1beta1.QueueScaleTrigger{{Name: "deliver", ListLength: 1}},
+	})) {
 		t.Error("queues → KEDA")
+	}
+	if !autoscalingUsesKEDA(appScaleConfig(&misskeyv1beta1.AppAutoscalingSpec{
+		RPS: &misskeyv1beta1.RPSTrigger{ServerAddress: "http://prom:9090", TargetRPS: 50},
+	})) {
+		t.Error("rps → KEDA")
 	}
 }
 
 func TestStaticReplicas(t *testing.T) {
-	comp := misskeyv1alpha1.ComponentSpec{Replicas: int32Ptr(3)}
-	if r := staticReplicas(comp); r == nil || *r != 3 {
+	comp := misskeyv1beta1.ComponentSpec{Replicas: int32Ptr(3)}
+	if r := staticReplicas(comp, nil); r == nil || *r != 3 {
 		t.Errorf("no autoscaling → static replicas: %v", r)
 	}
-	comp.Autoscaling = &misskeyv1alpha1.AutoscalingSpec{MaxReplicas: 5}
-	if staticReplicas(comp) != nil {
+	sc := appScaleConfig(&misskeyv1beta1.AppAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 5},
+	})
+	if staticReplicas(comp, sc) != nil {
 		t.Error("autoscaling → replicas unmanaged (nil)")
 	}
 }
 
 func TestBuildHPASpec(t *testing.T) {
-	a := &misskeyv1alpha1.AutoscalingSpec{MinReplicas: int32Ptr(2), MaxReplicas: 10, TargetCPUUtilizationPercentage: int32Ptr(70)}
+	a := &scaleConfig{AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MinReplicas: int32Ptr(2), MaxReplicas: 10, TargetCPUUtilizationPercentage: int32Ptr(70)}}
 	spec := buildHPASpec("example-app", a)
 	if spec.ScaleTargetRef.Name != "example-app" || spec.ScaleTargetRef.Kind != "Deployment" {
 		t.Errorf("scaleTargetRef wrong: %+v", spec.ScaleTargetRef)
@@ -1749,12 +1763,12 @@ func TestBuildHPASpec(t *testing.T) {
 		t.Errorf("cpu metric wrong: %+v", spec.Metrics)
 	}
 	// 未指定はcpu80%にfallback(HPAは最低1 metric要)
-	def := buildHPASpec("x", &misskeyv1alpha1.AutoscalingSpec{MaxReplicas: 3})
+	def := buildHPASpec("x", &scaleConfig{AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 3}})
 	if len(def.Metrics) != 1 || *def.Metrics[0].Resource.Target.AverageUtilization != 80 {
 		t.Errorf("default metric must be cpu 80: %+v", def.Metrics)
 	}
 	// memory
-	mem := buildHPASpec("x", &misskeyv1alpha1.AutoscalingSpec{MaxReplicas: 3, TargetMemoryUtilizationPercentage: int32Ptr(75)})
+	mem := buildHPASpec("x", &scaleConfig{AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 3, TargetMemoryUtilizationPercentage: int32Ptr(75)}})
 	if len(mem.Metrics) != 1 || mem.Metrics[0].Resource.Name != corev1.ResourceMemory {
 		t.Errorf("memory metric wrong: %+v", mem.Metrics)
 	}
@@ -1767,7 +1781,7 @@ func TestJobQueueEndpoint(t *testing.T) {
 	}
 	// jobQueue分離 → 専用インスタンス
 	m := newMisskey()
-	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{}}
+	m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{JobQueue: &misskeyv1beta1.RedisRole{}}
 	if ep := jobQueueEndpoint(resolve(m)); ep.host != "example-redis-jobqueue" {
 		t.Errorf("separated jobQueue endpoint: %q", ep.host)
 	}
@@ -1779,10 +1793,10 @@ func scaledObjectTriggers(so map[string]any) []any {
 
 func TestBuildScaledObjectStandalone(t *testing.T) {
 	m := newMisskey() // default redis standalone
-	a := &misskeyv1alpha1.AutoscalingSpec{
-		MinReplicas: int32Ptr(1), MaxReplicas: 30,
-		Queues: []misskeyv1alpha1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000}, {Name: "inbox", ListLength: 500}},
-	}
+	a := workerScaleConfig(&misskeyv1beta1.WorkerAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MinReplicas: int32Ptr(1), MaxReplicas: 30},
+		Queues:          []misskeyv1beta1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000}, {Name: "inbox", ListLength: 500}},
+	})
 	so := buildScaledObject(m, roleWorker, "example-worker", a, jobQueueEndpoint(resolve(m)))
 	if so.GetKind() != "ScaledObject" || so.GetName() != "example-worker" {
 		t.Errorf("identity wrong: %s/%s", so.GetKind(), so.GetName())
@@ -1814,11 +1828,11 @@ func TestBuildScaledObjectStandalone(t *testing.T) {
 func TestBuildScaledObjectSentinelAndOverride(t *testing.T) {
 	// jobQueueをHA分離 → sentinel trigger、listName override
 	m := newMisskey()
-	m.Spec.Redis.Roles = &misskeyv1alpha1.RedisRoles{JobQueue: &misskeyv1alpha1.RedisRole{HA: &misskeyv1alpha1.RedisHA{}}}
-	a := &misskeyv1alpha1.AutoscalingSpec{
-		MaxReplicas: 20,
-		Queues:      []misskeyv1alpha1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000, ListName: "custom:deliver:wait"}},
-	}
+	m.Spec.Redis.Roles = &misskeyv1beta1.RedisRoles{JobQueue: &misskeyv1beta1.RedisRole{HA: &misskeyv1beta1.RedisHA{}}}
+	a := workerScaleConfig(&misskeyv1beta1.WorkerAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 20},
+		Queues:          []misskeyv1beta1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000, ListName: "custom:deliver:wait"}},
+	})
 	so := buildScaledObject(m, roleWorker, "example-worker", a, jobQueueEndpoint(resolve(m)))
 	spec := so.Object["spec"].(map[string]any)
 	if spec["minReplicaCount"] != int64(1) {
@@ -1840,11 +1854,11 @@ func TestBuildScaledObjectSentinelAndOverride(t *testing.T) {
 func TestBuildScaledObjectExternalRedis(t *testing.T) {
 	// external redisはcluster外hostのためFQDN(.ns.svc)化しない
 	m := newMisskey()
-	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.prod.example.com", Port: 6380, DB: 2}
-	a := &misskeyv1alpha1.AutoscalingSpec{
-		MaxReplicas: 10,
-		Queues:      []misskeyv1alpha1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000}},
-	}
+	m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.prod.example.com", Port: 6380, DB: 2}
+	a := workerScaleConfig(&misskeyv1beta1.WorkerAutoscalingSpec{
+		AutoscalingSpec: misskeyv1beta1.AutoscalingSpec{MaxReplicas: 10},
+		Queues:          []misskeyv1beta1.QueueScaleTrigger{{Name: "deliver", ListLength: 1000}},
+	})
 	so := buildScaledObject(m, roleWorker, "example-worker", a, jobQueueEndpoint(resolve(m)))
 	trig := scaledObjectTriggers(so.Object["spec"].(map[string]any))[0].(map[string]any)
 	meta := trig["metadata"].(map[string]any)
@@ -1857,9 +1871,9 @@ func TestBuildScaledObjectExternalRedis(t *testing.T) {
 
 	// external sentinelも同様にhostそのまま
 	m2 := newMisskey()
-	m2.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{
+	m2.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{
 		Host: "redis.prod.example.com", MasterName: "mymaster",
-		Sentinels: []misskeyv1alpha1.RedisHostPort{{Host: "s1.prod.example.com"}, {Host: "s2.prod.example.com", Port: 26380}},
+		Sentinels: []misskeyv1beta1.RedisHostPort{{Host: "s1.prod.example.com"}, {Host: "s2.prod.example.com", Port: 26380}},
 	}
 	so2 := buildScaledObject(m2, roleWorker, "example-worker", a, jobQueueEndpoint(resolve(m2)))
 	trig2 := scaledObjectTriggers(so2.Object["spec"].(map[string]any))[0].(map[string]any)
@@ -1871,7 +1885,7 @@ func TestBuildScaledObjectExternalRedis(t *testing.T) {
 
 func TestRenderExternalRedisDB(t *testing.T) {
 	m := newMisskey()
-	m.Spec.Redis.External = &misskeyv1alpha1.ExternalRedis{Host: "redis.svc", DB: 3}
+	m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.svc", DB: 3}
 	if out := renderDefaultYML(m, resolve(m)); !strings.Contains(out, "  db: 3\n") {
 		t.Errorf("external redis db index missing:\n%s", out)
 	}

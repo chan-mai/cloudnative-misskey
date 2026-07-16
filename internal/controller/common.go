@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
 // ワークロードが参照する描画済みconfigのハッシュを保持
@@ -49,7 +49,7 @@ func checksumAnnotation(parts ...string) map[string]string {
 // checksumAnnotationに混ぜてSecret値のローテーションでpodをローリングさせる(不在はname:missing)
 // 参照集合はrenderInitEnvと同一。値でなくresourceVersion基準なのは、annotation経由の
 // 低エントロピーパスワードのオフライン総当りを避けるため
-func (r *MisskeyReconciler) referencedSecretVersions(ctx context.Context, m *misskeyv1alpha1.Misskey, p plan) []string {
+func (r *MisskeyReconciler) referencedSecretVersions(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) []string {
 	names := map[string]bool{p.dbPassSel.Name: true}
 	if p.meiliEnabled {
 		names[p.meiliKeySel.Name] = true
@@ -98,7 +98,7 @@ const (
 )
 
 // インスタンスの1コンポーネント用の標準ラベルセットを返す
-func labelsFor(m *misskeyv1alpha1.Misskey, component string) map[string]string {
+func labelsFor(m *misskeyv1beta1.Misskey, component string) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":         "misskey",
 		"app.kubernetes.io/instance":     m.Name,
@@ -109,13 +109,13 @@ func labelsFor(m *misskeyv1alpha1.Misskey, component string) map[string]string {
 }
 
 // tenantOf: spec.tenant、未設定ならnamespace
-func tenantOf(m *misskeyv1alpha1.Misskey) string {
+func tenantOf(m *misskeyv1beta1.Misskey) string {
 	return stringOr(m.Spec.Tenant, m.Namespace)
 }
 
 // コンポーネント用の最小・不変なラベルセレクタを返す
 // labelsForより小さく保ち、ラベル変更でセレクタが壊れないようにする
-func selectorFor(m *misskeyv1alpha1.Misskey, component string) map[string]string {
+func selectorFor(m *misskeyv1beta1.Misskey, component string) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/instance":  m.Name,
 		"app.kubernetes.io/component": component,
@@ -123,16 +123,16 @@ func selectorFor(m *misskeyv1alpha1.Misskey, component string) map[string]string
 }
 
 // 子オブジェクト名。すべてインスタンス名から決定的に導出
-func nameApp(m *misskeyv1alpha1.Misskey) string    { return m.Name + "-app" }
-func nameWorker(m *misskeyv1alpha1.Misskey) string { return m.Name + "-worker" }
-func nameProxy(m *misskeyv1alpha1.Misskey) string  { return m.Name + "-proxy" }
+func nameApp(m *misskeyv1beta1.Misskey) string    { return m.Name + "-app" }
+func nameWorker(m *misskeyv1beta1.Misskey) string { return m.Name + "-worker" }
+func nameProxy(m *misskeyv1beta1.Misskey) string  { return m.Name + "-proxy" }
 
 // nameMaintenance: 統合前構成の掃除専用(deleteLegacyMaintenanceWorkload), 数リリース後に削除可
-func nameMaintenance(m *misskeyv1alpha1.Misskey) string { return m.Name + "-maintenance" }
-func nameRedis(m *misskeyv1alpha1.Misskey) string       { return m.Name + "-redis" }
+func nameMaintenance(m *misskeyv1beta1.Misskey) string { return m.Name + "-maintenance" }
+func nameRedis(m *misskeyv1beta1.Misskey) string       { return m.Name + "-redis" }
 
 // redis instance名。suffix=""はdefault(<name>-redis)、role時は<name>-redis-<suffix>
-func nameRedisInstance(m *misskeyv1alpha1.Misskey, suffix string) string {
+func nameRedisInstance(m *misskeyv1beta1.Misskey, suffix string) string {
 	if suffix == "" {
 		return nameRedis(m)
 	}
@@ -140,12 +140,12 @@ func nameRedisInstance(m *misskeyv1alpha1.Misskey, suffix string) string {
 }
 
 // HA replication/sentinelのCR名, standalone STS(<name>-redis)とOT作成STS名の衝突回避で-ha基底
-func nameRedisHA(m *misskeyv1alpha1.Misskey, suffix string) string {
+func nameRedisHA(m *misskeyv1beta1.Misskey, suffix string) string {
 	return nameRedisInstance(m, suffix) + "-ha"
 }
 
 // HA時のsentinel Service。OT operatorが<replication名>-sentinelで生成
-func nameRedisSentinelService(m *misskeyv1alpha1.Misskey, suffix string) string {
+func nameRedisSentinelService(m *misskeyv1beta1.Misskey, suffix string) string {
 	return nameRedisHA(m, suffix) + "-sentinel"
 }
 
@@ -164,24 +164,24 @@ type redisRoleDesc struct {
 	nameSuffix string
 	configKey  string
 	passEnv    string
-	get        func(*misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole
+	get        func(*misskeyv1beta1.RedisRoles) *misskeyv1beta1.RedisRole
 }
 
 var redisRoleDescs = []redisRoleDesc{
-	{"jobQueue", "jobqueue", "redisForJobQueue", "REDIS_PASSWORD_JOBQUEUE", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.JobQueue }},
-	{"pubsub", "pubsub", "redisForPubsub", "REDIS_PASSWORD_PUBSUB", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.Pubsub }},
-	{"timelines", "timelines", "redisForTimelines", "REDIS_PASSWORD_TIMELINES", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.Timelines }},
-	{"reactions", "reactions", "redisForReactions", "REDIS_PASSWORD_REACTIONS", func(r *misskeyv1alpha1.RedisRoles) *misskeyv1alpha1.RedisRole { return r.Reactions }},
+	{"jobQueue", "jobqueue", "redisForJobQueue", "REDIS_PASSWORD_JOBQUEUE", func(r *misskeyv1beta1.RedisRoles) *misskeyv1beta1.RedisRole { return r.JobQueue }},
+	{"pubsub", "pubsub", "redisForPubsub", "REDIS_PASSWORD_PUBSUB", func(r *misskeyv1beta1.RedisRoles) *misskeyv1beta1.RedisRole { return r.Pubsub }},
+	{"timelines", "timelines", "redisForTimelines", "REDIS_PASSWORD_TIMELINES", func(r *misskeyv1beta1.RedisRoles) *misskeyv1beta1.RedisRole { return r.Timelines }},
+	{"reactions", "reactions", "redisForReactions", "REDIS_PASSWORD_REACTIONS", func(r *misskeyv1beta1.RedisRoles) *misskeyv1beta1.RedisRole { return r.Reactions }},
 }
 
-func nameMeili(m *misskeyv1alpha1.Misskey) string           { return m.Name + "-meilisearch" }
-func nameDB(m *misskeyv1alpha1.Misskey) string              { return m.Name + "-db" }
-func nameConfig(m *misskeyv1alpha1.Misskey) string          { return m.Name + "-config" }
-func nameMaintenanceHTML(m *misskeyv1alpha1.Misskey) string { return m.Name + "-maintenance-html" }
-func nameSetup(m *misskeyv1alpha1.Misskey) string           { return m.Name + "-setup" }
+func nameMeili(m *misskeyv1beta1.Misskey) string           { return m.Name + "-meilisearch" }
+func nameDB(m *misskeyv1beta1.Misskey) string              { return m.Name + "-db" }
+func nameConfig(m *misskeyv1beta1.Misskey) string          { return m.Name + "-config" }
+func nameMaintenanceHTML(m *misskeyv1beta1.Misskey) string { return m.Name + "-maintenance-html" }
+func nameSetup(m *misskeyv1beta1.Misskey) string           { return m.Name + "-setup" }
 
 // version-scopedなmigration Job名。image変更で別Job
-func nameMigrate(m *misskeyv1alpha1.Misskey) string {
+func nameMigrate(m *misskeyv1beta1.Misskey) string {
 	return m.Name + "-migrate-" + imageHash(m.Spec.Image)
 }
 
@@ -192,39 +192,39 @@ func imageHash(image string) string {
 }
 
 // バックアップ復元検証用の使い捨てCNPG Cluster名
-func nameDBVerify(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-verify" }
+func nameDBVerify(m *misskeyv1beta1.Misskey) string { return nameDB(m) + "-verify" }
 
 // CNPGが生成するクラスタのread-writeサービス
-func nameDBService(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-rw" }
+func nameDBService(m *misskeyv1beta1.Misskey) string { return nameDB(m) + "-rw" }
 
 // CNPGが生成するクラスタのread-onlyサービス(standby replicaへLB)
-func nameDBReadService(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-ro" }
+func nameDBReadService(m *misskeyv1beta1.Misskey) string { return nameDB(m) + "-ro" }
 
 // CNPG PgBouncer poolerの名前(=生成Service名)。rw=書込経路、ro=読取経路
-func nameDBPoolerRW(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-pooler-rw" }
-func nameDBPoolerRO(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-pooler-ro" }
+func nameDBPoolerRW(m *misskeyv1beta1.Misskey) string { return nameDB(m) + "-pooler-rw" }
+func nameDBPoolerRO(m *misskeyv1beta1.Misskey) string { return nameDB(m) + "-pooler-ro" }
 
 // migration専用のconfig ConfigMap。migrationはprimary直結・no-replicationで別config
-func nameMigrateConfig(m *misskeyv1alpha1.Misskey) string { return m.Name + "-migrate-config" }
+func nameMigrateConfig(m *misskeyv1beta1.Misskey) string { return m.Name + "-migrate-config" }
 
 // version-scopedなpre-migration Backup名。migration Jobと同じくimage変更で別Backup
-func namePreBackup(m *misskeyv1alpha1.Misskey) string {
+func namePreBackup(m *misskeyv1beta1.Misskey) string {
 	return m.Name + "-premigrate-" + imageHash(m.Spec.Image)
 }
 
 // HA redisのrequirepass用にoperatorが生成するSecret(全managed HAインスタンス共通)
-func nameRedisAuthSecret(m *misskeyv1alpha1.Misskey) string { return m.Name + "-redis-auth" }
+func nameRedisAuthSecret(m *misskeyv1beta1.Misskey) string { return m.Name + "-redis-auth" }
 
 // CNPGが生成するクラスタのアプリ認証情報Secret
-func nameDBAppSecret(m *misskeyv1alpha1.Misskey) string { return nameDB(m) + "-app" }
+func nameDBAppSecret(m *misskeyv1beta1.Misskey) string { return nameDB(m) + "-app" }
 
 // objectStorage meta書込Job名。入力hash先頭10hexで、設定変更時に別Jobとなる
-func nameObjectStorage(m *misskeyv1alpha1.Misskey, hash string) string {
+func nameObjectStorage(m *misskeyv1beta1.Misskey, hash string) string {
 	return m.Name + "-objstorage-" + hash[:10]
 }
 
 // objectStorage投入SQLのConfigMap(stable名)
-func nameObjectStorageSQL(m *misskeyv1alpha1.Misskey) string { return m.Name + "-objstorage-sql" }
+func nameObjectStorageSQL(m *misskeyv1beta1.Misskey) string { return m.Name + "-objstorage-sql" }
 
 // vへのポインタを返す
 func int32Ptr(v int32) *int32 { return &v }

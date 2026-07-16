@@ -17,7 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 package controller
 
-import misskeyv1alpha1 "github.com/chan-mai/cloudnative-misskey/api/v1alpha1"
+import misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 
 // upstream misskey/misskeyイメージの既定。fork対応で全てspec.runtimeから上書き可
 const (
@@ -29,12 +29,12 @@ const (
 
 // migrationConcurrentIndexes: migration Jobで CREATE INDEX CONCURRENTLY を使うか
 // 既定false(opt-in)。spec.migration.createIndexConcurrently=trueで有効化
-func migrationConcurrentIndexes(m *misskeyv1alpha1.Misskey) bool {
+func migrationConcurrentIndexes(m *misskeyv1beta1.Misskey) bool {
 	return boolOr(m.Spec.Migration.CreateIndexConcurrently, false)
 }
 
 // runtimeUID: spec.runtime.runAsUser、未指定なら991
-func runtimeUID(m *misskeyv1alpha1.Misskey) int64 {
+func runtimeUID(m *misskeyv1beta1.Misskey) int64 {
 	if u := m.Spec.Runtime.RunAsUser; u != nil {
 		return *u
 	}
@@ -42,7 +42,7 @@ func runtimeUID(m *misskeyv1alpha1.Misskey) int64 {
 }
 
 // runtimeStartCommand: app/workerコマンド、既定`pnpm run start`
-func runtimeStartCommand(m *misskeyv1alpha1.Misskey) []string {
+func runtimeStartCommand(m *misskeyv1beta1.Misskey) []string {
 	if c := m.Spec.Runtime.StartCommand; len(c) > 0 {
 		return c
 	}
@@ -50,7 +50,7 @@ func runtimeStartCommand(m *misskeyv1alpha1.Misskey) []string {
 }
 
 // runtimeMigrateCommand: migration Jobコマンド、既定`pnpm run migrate`
-func runtimeMigrateCommand(m *misskeyv1alpha1.Misskey) []string {
+func runtimeMigrateCommand(m *misskeyv1beta1.Misskey) []string {
 	if c := m.Spec.Runtime.MigrateCommand; len(c) > 0 {
 		return c
 	}
@@ -58,17 +58,17 @@ func runtimeMigrateCommand(m *misskeyv1alpha1.Misskey) []string {
 }
 
 // runtimeHealthPath: probeパス、既定`/api/server-info`
-func runtimeHealthPath(m *misskeyv1alpha1.Misskey) string {
+func runtimeHealthPath(m *misskeyv1beta1.Misskey) string {
 	return stringOr(m.Spec.Runtime.HealthPath, defaultHealthPath)
 }
 
 // runtimeConfigPath: default.ymlのmount先、既定`/misskey/.config/default.yml`
-func runtimeConfigPath(m *misskeyv1alpha1.Misskey) string {
+func runtimeConfigPath(m *misskeyv1beta1.Misskey) string {
 	return stringOr(m.Spec.Runtime.ConfigPath, defaultConfigPath)
 }
 
 // runtimeBuiltPath: built/コピー先、既定`/misskey/built`。空文字でコピー無効
-func runtimeBuiltPath(m *misskeyv1alpha1.Misskey) string {
+func runtimeBuiltPath(m *misskeyv1beta1.Misskey) string {
 	if p := m.Spec.Runtime.BuiltPath; p != nil {
 		return *p
 	}
