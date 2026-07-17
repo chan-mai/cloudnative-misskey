@@ -82,7 +82,7 @@ func (r *MisskeyReconciler) reconcileMeilisearch(ctx context.Context, m *misskey
 	storage := quantityOr(m.Spec.Search.Meilisearch.Storage, "10Gi")
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: nameMeili(m), Namespace: m.Namespace}}
-	return r.apply(ctx, m, sts, func() error {
+	return r.applyStatefulSet(ctx, m, sts, func() error {
 		sts.Labels = labelsFor(m, "meilisearch")
 		sts.Spec.ServiceName = nameMeili(m)
 		sts.Spec.Replicas = int32Ptr(1)

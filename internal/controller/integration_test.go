@@ -33,11 +33,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -1436,5 +1439,139 @@ func TestCELValidation(t *testing.T) {
 		if err := cl.Create(ctx, m); err != nil {
 			t.Errorf("%s must be accepted, got %v", tc.name, err)
 		}
+	}
+}
+
+// TestRedisStorageResizeIntegration: redis.storage変更でSTSがorphan再作成され、
+// 既存PVCがテンプレート増分に合わせて拡張されることを検証
+func TestRedisStorageResizeIntegration(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "resize"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	sc := &storagev1.StorageClass{
+		ObjectMeta:           metav1.ObjectMeta{Name: "expandable"},
+		Provisioner:          "example.com/test",
+		AllowVolumeExpansion: ptr.To(true),
+	}
+	if err := cl.Create(ctx, sc); err != nil {
+		t.Fatalf("storageclass: %v", err)
+	}
+
+	m := &misskeyv1beta1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: "rs", Namespace: ns},
+		Spec: misskeyv1beta1.MisskeySpec{
+			URL:                "https://rs.example.com/",
+			Image:              "misskey/misskey:x",
+			IDGenerationMethod: "aidx",
+			Search:             misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
+				Host: "pg", Database: "d", User: "u",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pgsec"}, Key: "pw"},
+			}},
+			Redis: misskeyv1beta1.RedisSpec{
+				Storage:          resource.MustParse("1Gi"),
+				StorageClassName: ptr.To("expandable"),
+			},
+			Ingress: misskeyv1beta1.IngressSpec{Host: "rs.example.com"},
+		},
+	}
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatalf("create misskey: %v", err)
+	}
+
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rs", Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		reconcile()
+	}
+
+	stsName := "rs-redis"
+	sts := &appsv1.StatefulSet{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: stsName, Namespace: ns}, sts); err != nil {
+		t.Fatalf("redis sts: %v", err)
+	}
+	if got := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "1Gi" {
+		t.Fatalf("initial vct storage = %s, want 1Gi", got.String())
+	}
+	oldUID := sts.UID
+
+	// envtestにはSTSコントローラが居ないため既存PVCを手で用意する
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-" + stsName + "-0", Namespace: ns},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: ptr.To("expandable"),
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			},
+		},
+	}
+	if err := cl.Create(ctx, pvc); err != nil {
+		t.Fatalf("pvc: %v", err)
+	}
+	// resize admissionはBoundのPVCのみ拡張を受理する
+	pvc.Status.Phase = corev1.ClaimBound
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}
+	if err := cl.Status().Update(ctx, pvc); err != nil {
+		t.Fatalf("pvc status: %v", err)
+	}
+
+	// storage増でSTSが再作成されPVCが拡張される
+	cur := &misskeyv1beta1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.Redis.Storage = resource.MustParse("2Gi")
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatalf("update misskey: %v", err)
+	}
+	// 旧STSのorphan削除まで進む (GC不在のenvtestではfinalizer除去待ちの再試行エラーになる)
+	if _, err := r.Reconcile(ctx, req); err != nil && !strings.Contains(err.Error(), "terminating") {
+		t.Fatalf("resize reconcile: %v", err)
+	}
+	// envtestにはGCが居ないためorphan finalizerを手で外して孤児化完了を模す
+	term := &appsv1.StatefulSet{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: stsName, Namespace: ns}, term); err == nil && term.DeletionTimestamp != nil {
+		term.Finalizers = nil
+		if err := cl.Update(ctx, term); err != nil {
+			t.Fatalf("strip orphan finalizer: %v", err)
+		}
+	}
+	reconcile()
+
+	if err := cl.Get(ctx, types.NamespacedName{Name: stsName, Namespace: ns}, sts); err != nil {
+		t.Fatalf("recreated sts: %v", err)
+	}
+	if sts.UID == oldUID {
+		t.Error("sts was not recreated (same UID)")
+	}
+	if got := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "2Gi" {
+		t.Errorf("vct storage = %s, want 2Gi", got.String())
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: pvc.Name, Namespace: ns}, pvc); err != nil {
+		t.Fatal(err)
+	}
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "2Gi" {
+		t.Errorf("pvc storage = %s, want 2Gi (expanded)", got.String())
+	}
+
+	// 変更なしの再reconcileで再作成ループしない
+	if err := cl.Get(ctx, types.NamespacedName{Name: stsName, Namespace: ns}, sts); err != nil {
+		t.Fatal(err)
+	}
+	stableUID := sts.UID
+	reconcile()
+	if err := cl.Get(ctx, types.NamespacedName{Name: stsName, Namespace: ns}, sts); err != nil {
+		t.Fatal(err)
+	}
+	if sts.UID != stableUID {
+		t.Error("sts recreated without vct change")
 	}
 }

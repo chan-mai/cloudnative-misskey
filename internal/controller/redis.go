@@ -269,7 +269,7 @@ func (r *MisskeyReconciler) reconcileRedisStandalone(ctx context.Context, m *mis
 	}
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.Namespace}}
-	if err := r.apply(ctx, m, sts, func() error {
+	if err := r.applyStatefulSet(ctx, m, sts, func() error {
 		sts.Labels = labelsFor(m, comp)
 		sts.Spec.ServiceName = name
 		sts.Spec.Replicas = int32Ptr(1)
