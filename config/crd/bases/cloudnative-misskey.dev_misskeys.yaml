@@ -251,13 +251,13 @@ spec:
                     type: array
                 type: object
               deletionPolicy:
-                default: Delete
+                default: Retain
                 description: |-
                   DeletionPolicy controls what happens to data-bearing resources (the CNPG
                   cluster, Redis/MeiliSearch StatefulSets and generated key Secrets) when this
-                  Misskey is deleted. Delete (default) garbage-collects everything via owner
-                  references. Retain orphans them so the data survives; recreating the Misskey
-                  with the same name re-adopts them.
+                  Misskey is deleted. Retain (default) orphans them so the data survives;
+                  recreating the Misskey with the same name re-adopts them. Delete
+                  garbage-collects everything via owner references (destroys the database).
                 enum:
                 - Delete
                 - Retain
@@ -266,6 +266,7 @@ spec:
                 description: |-
                   ExtraConfig is raw YAML appended verbatim to the generated default.yml.
                   Use it for settings not modeled by this CRD.
+                maxLength: 65536
                 type: string
               files:
                 description: |-
@@ -351,8 +352,15 @@ spec:
                   annotations:
                     additionalProperties:
                       type: string
-                    description: Annotations added to the Ingress object.
+                    description: |-
+                      Annotations added to the Ingress object. Operator-managed annotations
+                      (cert-manager, proxy-body-size) always win, and known privilege-escalating
+                      keys (nginx *-snippet, auth-url, ...) are dropped by the controller.
+                    maxProperties: 32
                     type: object
+                    x-kubernetes-validations:
+                    - message: ingress annotation values must be at most 4096 characters
+                      rule: self.all(k, size(self[k]) <= 4096)
                   className:
                     default: nginx
                     description: ClassName sets ingressClassName, e.g. nginx or traefik.
@@ -362,8 +370,11 @@ spec:
                     description: Enabled toggles Ingress creation.
                     type: boolean
                   host:
-                    description: Host overrides the ingress host. Defaults to the
-                      host part of spec.url.
+                    description: |-
+                      Host overrides the ingress host. Defaults to the host part of spec.url.
+                      Constrained to a DNS-1123 subdomain to prevent host takeover via malformed values.
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                   issuerRef:
                     description: |-
@@ -1345,7 +1356,10 @@ spec:
                       ClientIPHeader, when set, overrides X-Real-IP and X-Forwarded-For from the
                       named header (e.g. CF-Connecting-IP behind Cloudflare). When empty, the
                       upstream's X-Forwarded-For is preserved, trusting private-range upstreams
-                      via Caddy trusted_proxies.
+                      via Caddy trusted_proxies. Restricted to a bare HTTP header name so it cannot
+                      inject arbitrary Caddyfile directives.
+                    maxLength: 64
+                    pattern: ^[A-Za-z0-9-]+$
                     type: string
                   enabled:
                     default: true
@@ -1370,6 +1384,7 @@ spec:
                       html:
                         description: HTML is the page body served during maintenance.
                           A default is used when empty.
+                        maxLength: 262144
                         type: string
                       reloadSeconds:
                         default: 30
@@ -1532,6 +1547,11 @@ spec:
                           - host
                           type: object
                         type: array
+                      tls:
+                        description: |-
+                          TLS enables TLS for connections to this external Redis. Also propagated to
+                          the KEDA autoscaling trigger so it does not connect in plaintext.
+                        type: boolean
                     required:
                     - host
                     type: object
@@ -1738,6 +1758,11 @@ spec:
                                   - host
                                   type: object
                                 type: array
+                              tls:
+                                description: |-
+                                  TLS enables TLS for connections to this external Redis. Also propagated to
+                                  the KEDA autoscaling trigger so it does not connect in plaintext.
+                                type: boolean
                             required:
                             - host
                             type: object
@@ -1948,6 +1973,11 @@ spec:
                                   - host
                                   type: object
                                 type: array
+                              tls:
+                                description: |-
+                                  TLS enables TLS for connections to this external Redis. Also propagated to
+                                  the KEDA autoscaling trigger so it does not connect in plaintext.
+                                type: boolean
                             required:
                             - host
                             type: object
@@ -2158,6 +2188,11 @@ spec:
                                   - host
                                   type: object
                                 type: array
+                              tls:
+                                description: |-
+                                  TLS enables TLS for connections to this external Redis. Also propagated to
+                                  the KEDA autoscaling trigger so it does not connect in plaintext.
+                                type: boolean
                             required:
                             - host
                             type: object
@@ -2368,6 +2403,11 @@ spec:
                                   - host
                                   type: object
                                 type: array
+                              tls:
+                                description: |-
+                                  TLS enables TLS for connections to this external Redis. Also propagated to
+                                  the KEDA autoscaling trigger so it does not connect in plaintext.
+                                type: boolean
                             required:
                             - host
                             type: object
@@ -2549,9 +2589,11 @@ spec:
                       type: string
                     type: array
                   runAsUser:
-                    description: RunAsUser overrides the container uid. Default 991
-                      (upstream misskey image).
+                    description: |-
+                      RunAsUser overrides the container uid. Default 991 (upstream misskey image).
+                      uid 0 conflicts with the enforced RunAsNonRoot and would wedge the pod, so it is rejected.
                     format: int64
+                    minimum: 1
                     type: integer
                   startCommand:
                     description: |-

@@ -62,11 +62,11 @@ type MisskeySpec struct {
 
 	// DeletionPolicy controls what happens to data-bearing resources (the CNPG
 	// cluster, Redis/MeiliSearch StatefulSets and generated key Secrets) when this
-	// Misskey is deleted. Delete (default) garbage-collects everything via owner
-	// references. Retain orphans them so the data survives; recreating the Misskey
-	// with the same name re-adopts them.
+	// Misskey is deleted. Retain (default) orphans them so the data survives;
+	// recreating the Misskey with the same name re-adopts them. Delete
+	// garbage-collects everything via owner references (destroys the database).
 	// +kubebuilder:validation:Enum=Delete;Retain
-	// +kubebuilder:default=Delete
+	// +kubebuilder:default=Retain
 	// +optional
 	DeletionPolicy string `json:"deletionPolicy,omitempty"`
 
@@ -142,6 +142,7 @@ type MisskeySpec struct {
 
 	// ExtraConfig is raw YAML appended verbatim to the generated default.yml.
 	// Use it for settings not modeled by this CRD.
+	// +kubebuilder:validation:MaxLength=65536
 	// +optional
 	ExtraConfig string `json:"extraConfig,omitempty"`
 
@@ -420,6 +421,8 @@ type LimitRangeSpec struct {
 // config is always Misskey's default.yml format.
 type RuntimeSpec struct {
 	// RunAsUser overrides the container uid. Default 991 (upstream misskey image).
+	// uid 0 conflicts with the enforced RunAsNonRoot and would wedge the pod, so it is rejected.
+	// +kubebuilder:validation:Minimum=1
 	// +optional
 	RunAsUser *int64 `json:"runAsUser,omitempty"`
 
@@ -609,7 +612,10 @@ type ProxySpec struct {
 	// ClientIPHeader, when set, overrides X-Real-IP and X-Forwarded-For from the
 	// named header (e.g. CF-Connecting-IP behind Cloudflare). When empty, the
 	// upstream's X-Forwarded-For is preserved, trusting private-range upstreams
-	// via Caddy trusted_proxies.
+	// via Caddy trusted_proxies. Restricted to a bare HTTP header name so it cannot
+	// inject arbitrary Caddyfile directives.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
+	// +kubebuilder:validation:MaxLength=64
 	// +optional
 	ClientIPHeader string `json:"clientIPHeader,omitempty"`
 
@@ -626,6 +632,7 @@ type MaintenanceSpec struct {
 	Enabled *bool `json:"enabled,omitempty"`
 
 	// HTML is the page body served during maintenance. A default is used when empty.
+	// +kubebuilder:validation:MaxLength=262144
 	// +optional
 	HTML string `json:"html,omitempty"`
 
@@ -661,10 +668,17 @@ type IngressSpec struct {
 	ClassName string `json:"className,omitempty"`
 
 	// Host overrides the ingress host. Defaults to the host part of spec.url.
+	// Constrained to a DNS-1123 subdomain to prevent host takeover via malformed values.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Host string `json:"host,omitempty"`
 
-	// Annotations added to the Ingress object.
+	// Annotations added to the Ingress object. Operator-managed annotations
+	// (cert-manager, proxy-body-size) always win, and known privilege-escalating
+	// keys (nginx *-snippet, auth-url, ...) are dropped by the controller.
+	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 4096)",message="ingress annotation values must be at most 4096 characters"
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 
@@ -863,6 +877,11 @@ type ExternalRedis struct {
 	// MasterName is the sentinel master group name (required with Sentinels).
 	// +optional
 	MasterName string `json:"masterName,omitempty"`
+
+	// TLS enables TLS for connections to this external Redis. Also propagated to
+	// the KEDA autoscaling trigger so it does not connect in plaintext.
+	// +optional
+	TLS *bool `json:"tls,omitempty"`
 }
 
 // RedisHostPort is a sentinel endpoint.
