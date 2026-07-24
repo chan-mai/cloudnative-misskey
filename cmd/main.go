@@ -77,7 +77,9 @@ func main() {
 	var allowedClusterIssuers string
 	flag.StringVar(&watchNamespaces, "watch-namespaces", "",
 		"Comma-separated namespaces to watch. Empty watches all namespaces (cluster-scoped). "+
-			"Restrict this and bind the manager with namespaced RoleBindings for multi-tenant least-privilege.")
+			"When set, namespaced resources (Misskey and its children) can be granted via per-namespace "+
+			"RoleBindings, but the cluster-scoped MisskeyChannel CRD still requires a small ClusterRole "+
+			"for get;list;watch on misskeychannels.")
 	flag.StringVar(&allowedImageRegistries, "allowed-image-registries", "",
 		"Comma-separated allowed image reference prefixes. Empty allows any. When set, the webhook "+
 			"rejects spec.image/objectStorage.image/MisskeyChannel.image outside the list.")
