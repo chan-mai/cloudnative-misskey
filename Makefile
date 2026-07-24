@@ -1,4 +1,6 @@
-# Image URL to use all building/pushing image targets
+# Image URL to use all building/pushing image targets.
+# NOTE: :latest is a dev/manual default for `make deploy`. Production must deploy the
+# digest-pinned dist/install.yaml from a GitHub Release, or override IMG with a digest.
 IMG ?= ghcr.io/chan-mai/cloudnative-misskey:latest
 
 # CONTAINER_TOOL defines the container tool to be used for building images.

@@ -19,7 +19,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -32,11 +34,22 @@ import (
 	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
+// yq: ユーザ由来スカラーを安全なYAML二重引用符スカラーへエンコード
+// JSONエンコードはYAML1.2のflowスカラーとして妥当で、改行/制御文字を\nへエスケープし
+// default.ymlへの構造注入(重複キー・任意キー注入・DoS)を封じる
+func yq(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// clientIPHeaderPattern: 有効なHTTPヘッダ名(CRD Patternと同一)。非適合はCaddyfileへ出力しない
+var clientIPHeaderPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
 // renderRedisBlock: redis / redisForXxx ブロックを出力
 // sentinels非空でSentinelモード(host/portはioredis上無視だがMisskey schema必須)
 func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
 	w("%s:\n", key)
-	w("  host: %s\n", ep.host)
+	w("  host: %s\n", yq(ep.host))
 	w("  port: %d\n", ep.port)
 	// 0はMisskey既定のため省略(managedのchecksumを変えない)
 	if ep.db != 0 {
@@ -45,10 +58,10 @@ func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
 	if len(ep.sentinels) > 0 {
 		w("  sentinels:\n")
 		for _, s := range ep.sentinels {
-			w("    - host: %s\n", s.host)
+			w("    - host: %s\n", yq(s.host))
 			w("      port: %d\n", s.port)
 		}
-		w("  name: %s\n", ep.masterName)
+		w("  name: %s\n", yq(ep.masterName))
 	}
 	if ep.passSel != nil {
 		w("  pass: ${%s}\n", ep.passEnv)
@@ -56,6 +69,10 @@ func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
 		if len(ep.sentinels) > 0 {
 			w("  sentinelPassword: ${%s}\n", ep.passEnv)
 		}
+	}
+	// external redisのTLSを実接続へ反映(ioredisのtlsオプション, 空オブジェクトで有効化)
+	if ep.enableTLS {
+		w("  tls: {}\n")
 	}
 }
 
@@ -66,7 +83,7 @@ func renderDefaultYML(m *misskeyv1beta1.Misskey, p plan) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
 
 	w("# Managed by cloudnative-misskey. Do not edit by hand.\n")
-	w("url: %s\n", m.Spec.URL)
+	w("url: %s\n", yq(m.Spec.URL))
 	w("port: %d\n\n", misskeyPort)
 
 	if p.setupEnabled {
@@ -74,20 +91,20 @@ func renderDefaultYML(m *misskeyv1beta1.Misskey, p plan) string {
 	}
 
 	w("db:\n")
-	w("  host: %s\n", p.dbHost)
+	w("  host: %s\n", yq(p.dbHost))
 	w("  port: %d\n", p.dbPort)
-	w("  db: %s\n", p.dbName)
-	w("  user: %s\n", p.dbUser)
+	w("  db: %s\n", yq(p.dbName))
+	w("  user: %s\n", yq(p.dbUser))
 	w("  pass: ${DB_PASSWORD}\n")
 	// read offload時のみdbReplications+dbSlavesを配線。slaveのpassも同一appの${DB_PASSWORD}
 	if p.dbReplications {
 		w("dbReplications: true\n")
 		w("dbSlaves:\n")
 		for _, s := range p.dbSlaves {
-			w("  - host: %s\n", s.host)
+			w("  - host: %s\n", yq(s.host))
 			w("    port: %d\n", s.port)
-			w("    db: %s\n", s.db)
-			w("    user: %s\n", s.user)
+			w("    db: %s\n", yq(s.db))
+			w("    user: %s\n", yq(s.user))
 			w("    pass: ${DB_PASSWORD}\n")
 		}
 		w("\n")
@@ -108,11 +125,11 @@ func renderDefaultYML(m *misskeyv1beta1.Misskey, p plan) string {
 	w("  provider: %s\n", p.provider)
 	if p.meiliEnabled {
 		w("\nmeilisearch:\n")
-		w("  host: %s\n", p.meiliHost)
+		w("  host: %s\n", yq(p.meiliHost))
 		w("  port: %d\n", p.meiliPort)
 		w("  apiKey: ${MEILI_KEY}\n")
 		w("  ssl: %s\n", strconv.FormatBool(p.meiliSSL))
-		w("  index: %s\n", p.meiliIndex)
+		w("  index: %s\n", yq(p.meiliIndex))
 		w("  scope: %s\n", p.meiliScope)
 	}
 	w("\n")
@@ -151,13 +168,17 @@ func renderPerformance(w func(string, ...any), p misskeyv1beta1.PerformanceSpec)
 // renderOutboundProxy: 外向きforward proxy設定(未設定キーは出力しない)
 func renderOutboundProxy(w func(string, ...any), o misskeyv1beta1.OutboundProxySpec) {
 	if o.HTTP != "" {
-		w("proxy: %s\n", o.HTTP)
+		w("proxy: %s\n", yq(o.HTTP))
 	}
 	if o.SMTP != "" {
-		w("proxySmtp: %s\n", o.SMTP)
+		w("proxySmtp: %s\n", yq(o.SMTP))
 	}
 	if len(o.BypassHosts) > 0 {
-		w("proxyBypassHosts: [%s]\n", strings.Join(o.BypassHosts, ", "))
+		quoted := make([]string, len(o.BypassHosts))
+		for i, h := range o.BypassHosts {
+			quoted[i] = yq(h)
+		}
+		w("proxyBypassHosts: [%s]\n", strings.Join(quoted, ", "))
 	}
 }
 
@@ -167,7 +188,7 @@ func renderFiles(w func(string, ...any), f misskeyv1beta1.FilesSpec) {
 		w("maxFileSize: %d\n", *f.MaxFileSize)
 	}
 	if f.MediaProxy != "" {
-		w("mediaProxy: %s\n", f.MediaProxy)
+		w("mediaProxy: %s\n", yq(f.MediaProxy))
 	}
 }
 
@@ -206,7 +227,7 @@ func renderCaddyfile(m *misskeyv1beta1.Misskey) string {
 	w(fmt.Sprintf("\treverse_proxy %s:%d {\n", nameApp(m), misskeyPort))
 	// ClientIPHeader指定時のみX-Real-IP/X-Forwarded-Forを上書き
 	// 未指定時はtrusted_proxiesで信頼したupstreamのX-Forwarded-Forを保持
-	if h := m.Spec.Proxy.ClientIPHeader; h != "" {
+	if h := m.Spec.Proxy.ClientIPHeader; h != "" && clientIPHeaderPattern.MatchString(h) {
 		w(fmt.Sprintf("\t\theader_up X-Real-IP {header.%s}\n", h))
 		w(fmt.Sprintf("\t\theader_up X-Forwarded-For {header.%s}\n", h))
 	}
@@ -327,13 +348,14 @@ func (r *MisskeyReconciler) reconcileSetupSecret(ctx context.Context, m *misskey
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
 		}
-		if _, ok := secret.Data[setupPasswordID]; !ok {
+		if _, ok := secret.Data[setupPasswordID]; !ok || rotationRequested(m, secret) {
 			pw, err := randomHex(16)
 			if err != nil {
 				return err
 			}
 			secret.Data[setupPasswordID] = []byte(pw)
 		}
+		markRotation(m, secret)
 		return nil
 	})
 }

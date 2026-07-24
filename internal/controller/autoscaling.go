@@ -185,7 +185,7 @@ func buildScaledObject(m *misskeyv1beta1.Misskey, component, targetName string, 
 			"listName":      listName,
 			"listLength":    strconv.Itoa(int(q.ListLength)),
 			"databaseIndex": strconv.Itoa(int(ep.db)),
-			"enableTLS":     "false",
+			"enableTLS":     strconv.FormatBool(ep.enableTLS),
 		}
 		typ := "redis"
 		if sentinel {

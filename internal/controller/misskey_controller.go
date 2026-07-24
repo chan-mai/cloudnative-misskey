@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -69,6 +70,21 @@ func (r *MisskeyReconciler) driftInterval() time.Duration {
 	return defaultDriftResyncInterval
 }
 
+// truncateMsg: Event/statusメッセージ長の上限。過大なエラー全文によるAPI負荷/可読性劣化を防ぐ
+// 接尾辞込みで上限内に収め、UTF-8のマルチバイト境界で切らない
+func truncateMsg(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	const suffix = "…(truncated)"
+	cut := max - len(suffix)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + suffix
+}
+
 // event: Recorder配線時のみEventを発行(テスト等の未配線ではno-op)
 // actionはregardingに対して行った操作(UpperCamelCase)、noteは人間可読メッセージ
 func (r *MisskeyReconciler) event(m *misskeyv1beta1.Misskey, eventType, reason, action, note string, args ...any) {
@@ -84,7 +100,10 @@ func (r *MisskeyReconciler) event(m *misskeyv1beta1.Misskey, eventType, reason, 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services;configmaps;secrets;persistentvolumeclaims;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;configmaps;persistentvolumeclaims;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
+// Secretはwatch/Ownsせずname指定getのみ(cluster全Secretのlist/watch権限を持たない)
+// operatorはSecretを削除しないためdeleteも付与しない(生成SecretのcleanupはownerRef GCに委ねる)
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses;networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
@@ -121,7 +140,7 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		reconcileErr = r.reconcileAll(ctx, &m)
 	}
 	if reconcileErr != nil {
-		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "Reconcile", "%v", reconcileErr)
+		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "Reconcile", "%s", truncateMsg(reconcileErr.Error()))
 	}
 	ready, statusErr := r.updateStatus(ctx, &m, reconcileErr)
 	if statusErr != nil {
@@ -479,7 +498,7 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1beta1.
 		ready = false
 		readySt = metav1.ConditionFalse
 		readyReason = "ReconcileError"
-		readyMsg = reconcileErr.Error()
+		readyMsg = truncateMsg(reconcileErr.Error())
 		phase = "Error"
 	case m.Spec.Suspend:
 		ready = false
@@ -577,32 +596,18 @@ func (r *MisskeyReconciler) misskeysForChannel(ctx context.Context, obj client.O
 	return reqs
 }
 
-// misskeysInNamespace: Secret変更を同一namespaceの全Misskeyへ広播(参照Secretのローテ検知)
-// Owns(Secret)は所有分のみ発火するため、CNPG払い出しやユーザ持込Secretの更新はここで拾う
-func (r *MisskeyReconciler) misskeysInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
-	var list misskeyv1beta1.MisskeyList
-	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
-		return nil
-	}
-	reqs := make([]reconcile.Request, 0, len(list.Items))
-	for i := range list.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
-	}
-	return reqs
-}
-
 // コントローラと所有リソースを結線
 func (r *MisskeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Secretはwatch/Ownsせず(cluster-wide list/watchを排し、cacheにも全Secretを載せない)
+	// managed Secretの変更検知とローテはconfig-checksum + drift resyncで代替する
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&misskeyv1beta1.Misskey{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.misskeysInNamespace)).
 		Watches(&misskeyv1beta1.MisskeyChannel{}, handler.EnqueueRequestsFromMapFunc(r.misskeysForChannel)).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.Secret{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
 		Owns(&networkingv1.Ingress{}).

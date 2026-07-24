@@ -48,13 +48,14 @@ func (r *MisskeyReconciler) reconcileRedisAuthSecret(ctx context.Context, m *mis
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
 		}
-		if _, ok := secret.Data["password"]; !ok {
+		if _, ok := secret.Data["password"]; !ok || rotationRequested(m, secret) {
 			pw, err := randomHex(24)
 			if err != nil {
 				return err
 			}
 			secret.Data["password"] = []byte(pw)
 		}
+		markRotation(m, secret)
 		return nil
 	})
 }
@@ -152,12 +153,17 @@ func redisUnstructured(m *misskeyv1beta1.Misskey, suffix string, gvk schema.Grou
 	return u
 }
 
-// redisHAPodSecurityContext: opstreeイメージ用のfsGroup付きpod securityContext
+// redisHAPodSecurityContext: opstreeイメージ用のpod securityContext
+// standalone(nonRootPodSecurityContext)と同等にrunAsNonRoot+seccomp RuntimeDefaultを強制
 func redisHAPodSecurityContext() map[string]any {
 	return map[string]any{
-		"runAsUser":  int64(opstreeRedisUID),
-		"runAsGroup": int64(opstreeRedisUID),
-		"fsGroup":    int64(opstreeRedisUID),
+		"runAsNonRoot": true,
+		"runAsUser":    int64(opstreeRedisUID),
+		"runAsGroup":   int64(opstreeRedisUID),
+		"fsGroup":      int64(opstreeRedisUID),
+		"seccompProfile": map[string]any{
+			"type": "RuntimeDefault",
+		},
 	}
 }
 

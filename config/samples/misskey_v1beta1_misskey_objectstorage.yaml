@@ -1,6 +1,9 @@
 # Object storage (media) on Cloudflare R2. The operator writes these into
 # Misskey's meta table via a one-shot Job after migration (autoConfigure).
 # Existing uploads are not migrated; set this up before users upload files.
+# WARNING: example only. Do not commit this plaintext Secret with real
+# credentials to Git. For GitOps, keep it out of the repo and use a SealedSecret
+# or an ExternalSecret (those are safe to commit) to deliver the credentials.
 apiVersion: v1
 kind: Secret
 metadata:

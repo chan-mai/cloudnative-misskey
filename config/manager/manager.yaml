@@ -46,6 +46,7 @@ spec:
               value: "false"
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           livenessProbe:
@@ -65,4 +66,5 @@ spec:
               cpu: 10m
               memory: 64Mi
             limits:
+              cpu: "1"
               memory: 128Mi

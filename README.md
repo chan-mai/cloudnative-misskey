@@ -141,7 +141,7 @@ spec:
 | `trackImageDigest` | `false` | imageのタグをレジストリでdigest解決しpodを`image@digest`にpin、定期再解決(5分TTL)する。`:latest`等のmutableタグへの再pushを検知してapp/workerを自動ロール。private registryは`imagePullSecrets`で認証。offの場合はdigest付き参照を推奨(タグ打ち直しは検知されない) |
 | `imageFrom.channel` | (どちらか必須) | `MisskeyChannel`からimageを解決し段階ロールアウトに追従。詳細は[fleetのimage管理](#fleetのimage管理misskeychannel) |
 | `idGenerationMethod` | `aidx` | ID方式。初期化後は変更不可 |
-| `deletionPolicy` | `Delete` | CR削除時のデータ資源(CNPG/Redis/Meili/生成key Secret)の扱い。`Retain`でownerRefを外しデータ保持(同名CR再作成で再adopt) |
+| `deletionPolicy` | `Retain` | CR削除時のデータ資源(CNPG/Redis/Meili/生成key Secret)の扱い。既定`Retain`はownerRefを外しデータ保持(同名CR再作成で再adopt)。`Delete`でDB含め全GC(破壊的)。**注意: 既定は以前`Delete`。誤削除でのDB全損を防ぐため`Retain`へ変更** |
 | `suspend` | `false` | インスタンス休止。app/workerを0にしmigration等のJob新規作成を停止、proxy/DB/Redis/Meiliは稼働継続で訪問者にはメンテページが出る。phaseは`Suspended` |
 | `tenant` | namespace名 | 全リソース/podに付く`cloudnative-misskey.dev/tenant`ラベル値。ログ/メトリクスのテナント振り分け用。初期化後は変更不可 |
 | `setupPassword` | (なし) | 初回admin登録用パスワード。`secretRef`指定か、未指定なら`<name>-setup` Secretへ自動生成 |
@@ -467,6 +467,9 @@ make test-e2e    # kind e2e
 - **オブジェクトストレージ(media)は`spec.objectStorage`で設定できます**([オブジェクトストレージ](#オブジェクトストレージmedia)参照)。未設定時のアップロードファイルはpodローカル(emptyDir)に置かれ、**pod再起動で消え、複数レプリカ間でも共有されません**。よって`app.replicas>1`で運用する場合は`objectStorage`を設定してください。既存アップロード済みファイルは設定後も移行されません(新規アップロードのみ対象)。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
 - 参照Secret(DBパスワード/Meiliキー/Redisパスワード/setupPassword)のローテーションはpodテンプレートのchecksumに反映され、app/worker/失敗中のmigration Jobが自動で追従します。判定はSecretの`resourceVersion`基準のため、値が変わらないmetadata更新でもローリングが起きることがあります。
+- **Secretはcluster-wideにlist/watchしません**(全Secretのinformerキャッシュ肥大とRBAC上のlist/watch権限を排し、name指定getのみ)。operator生成/CNPG/ユーザ持込Secretの変更検知はconfig-checksumと定期requeue(`--drift-resync-interval`、既定3分)で反映するため、外部Secret値のローテはpodローリングまで最大その間隔の遅延があります。
+- operator生成Secret(setup/redis-auth/meiliキー)は既定で不変です。ローテーションはCRに`cloudnative-misskey.dev/rotate: <任意の値>`annotationを付け、値を変えるたびに新しい乱数へ再生成されます(checksum経由でpodが追従)。
+- **セキュリティ強化のmanagerフラグ**(いずれも既定は無効=後方互換): `--watch-namespaces`(監視namespaceを限定。namespaced resource(Misskeyと子リソース)はnamespace別RoleBindingで付与できるが、cluster-scopedな`MisskeyChannel`はmisskeychannelsへの`get;list;watch`を持つ小さなClusterRoleが別途必要)、`--allowed-image-registries`(全ユーザ指定imageのレジストリprefix許可リスト、webhookで拒否)、`--allowed-cluster-issuers`(`ingress.issuerRef`のClusterIssuer許可リスト)。Ingress annotationはnginx snippet系/auth系/mirror系を遮断し、operator管理キーはユーザ指定で上書きできません。
 - managed redisは常時requirepass認証です。認証を持たない旧版からアップグレードすると、standalone redis STS(command/env変更)とdefault.ymlへの`pass:`追加でredis/app/worker/migrationが一度ローリングします。AOFでデータは保持され、機能的な破壊はありません。
 - メンテナンス応答は既定HTTP 200のため、外形監視は実ステータスを返す`/api/*`を対象にしてください。
 - Caddyの`trusted_proxies`は`private_ranges`固定です。前段が非private(cluster外のCloudflare等)なら実CIDRに合わせた調整が要ります。

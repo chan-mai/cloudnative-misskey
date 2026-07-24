@@ -559,7 +559,7 @@ func TestChannelDigestTracking(t *testing.T) {
 
 	// 同一タグでdigestだけ変化 → previousImageが立ちロールアウト開始
 	dr.mu.Lock()
-	delete(dr.cache, "misskey/misskey:latest")
+	delete(dr.cache, cacheKey("misskey/misskey:latest", ""))
 	dr.mu.Unlock()
 	dr.headFunc = func(_ context.Context, _ string, _ authn.Keychain) (string, error) {
 		return "sha256:d2", nil
@@ -579,7 +579,7 @@ func TestChannelDigestTracking(t *testing.T) {
 
 	// 解決失敗時はstatus維持(rollout状態を壊さない)
 	dr.mu.Lock()
-	delete(dr.cache, "misskey/misskey:latest")
+	delete(dr.cache, cacheKey("misskey/misskey:latest", ""))
 	dr.mu.Unlock()
 	dr.headFunc = func(_ context.Context, _ string, _ authn.Keychain) (string, error) {
 		return "", fmt.Errorf("registry down")

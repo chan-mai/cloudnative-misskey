@@ -15,6 +15,11 @@ spec:
   dnsNames:
     - webhook-service.cloudnative-misskey-system.svc
     - webhook-service.cloudnative-misskey-system.svc.cluster.local
+  # 明示的な有効期間と鍵ローテーション(既定90日/鍵再利用に依存しない)
+  duration: 2160h # 90d
+  renewBefore: 360h # 15d
+  privateKey:
+    rotationPolicy: Always
   issuerRef:
     kind: Issuer
     name: selfsigned-issuer

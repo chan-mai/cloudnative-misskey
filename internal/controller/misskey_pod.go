@@ -87,7 +87,6 @@ func httpProbe(path string, period, timeout, failure int32) *corev1.Probe {
 // app/workerロール共通のPodSpecを生成
 func buildMisskeyPodSpec(m *misskeyv1beta1.Misskey, p plan, role string, comp misskeyv1beta1.ComponentSpec) corev1.PodSpec {
 	env := []corev1.EnvVar{
-		{Name: "COREPACK_INTEGRITY_KEYS", Value: "0"},
 		{Name: "MK_DISABLE_CLUSTERING", Value: "true"},
 	}
 	var ports []corev1.ContainerPort
@@ -126,14 +125,15 @@ func buildMisskeyPodSpec(m *misskeyv1beta1.Misskey, p plan, role string, comp mi
 	}
 
 	return corev1.PodSpec{
-		ImagePullSecrets:          m.Spec.ImagePullSecrets,
-		SecurityContext:           nonRootPodSecurityContext(runtimeUID(m)),
-		TopologySpreadConstraints: spread,
-		NodeSelector:              comp.NodeSelector,
-		Tolerations:               comp.Tolerations,
-		InitContainers:            misskeyInitContainers(m, p),
-		Containers:                []corev1.Container{mainContainer},
-		Volumes:                   misskeyVolumes(m, nameConfig(m)),
+		AutomountServiceAccountToken: boolPtr(false),
+		ImagePullSecrets:             m.Spec.ImagePullSecrets,
+		SecurityContext:              nonRootPodSecurityContext(runtimeUID(m)),
+		TopologySpreadConstraints:    spread,
+		NodeSelector:                 comp.NodeSelector,
+		Tolerations:                  comp.Tolerations,
+		InitContainers:               misskeyInitContainers(m, p),
+		Containers:                   []corev1.Container{mainContainer},
+		Volumes:                      misskeyVolumes(m, nameConfig(m)),
 	}
 }
 
@@ -161,6 +161,7 @@ func misskeyInitContainers(m *misskeyv1beta1.Misskey, p plan) []corev1.Container
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "config-tpl", MountPath: "/tpl"},
 			{Name: "config-rendered", MountPath: "/shared"},
+			tmpMount(),
 		},
 	})
 	return inits
@@ -179,6 +180,7 @@ func misskeyVolumes(m *misskeyv1beta1.Misskey, cfg string) []corev1.Volume {
 			},
 		},
 		{Name: "config-rendered", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		tmpVolume(),
 	}
 	if runtimeBuiltPath(m) != "" {
 		vols = append(vols, corev1.Volume{Name: "built-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
@@ -190,6 +192,7 @@ func misskeyVolumes(m *misskeyv1beta1.Misskey, cfg string) []corev1.Volume {
 func misskeyConfigMounts(m *misskeyv1beta1.Misskey) []corev1.VolumeMount {
 	mounts := []corev1.VolumeMount{
 		{Name: "config-rendered", MountPath: runtimeConfigPath(m), SubPath: "default.yml", ReadOnly: true},
+		tmpMount(),
 	}
 	if bp := runtimeBuiltPath(m); bp != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: "built-volume", MountPath: bp})

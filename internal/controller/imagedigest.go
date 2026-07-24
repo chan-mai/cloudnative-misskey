@@ -36,6 +36,15 @@ const digestResolveTTL = 5 * time.Minute
 // digestResolveTimeout: レジストリ1回あたりの問い合わせ上限
 const digestResolveTimeout = 10 * time.Second
 
+// maxCacheEntries: digest cacheのエントリ上限。ユニークtag大量作成によるメモリ肥大(DoS)を防ぐ
+const maxCacheEntries = 1024
+
+// cacheKey: image + 認証コンテキスト識別子。keyIDでテナント跨ぎの解決結果共有を防ぐ
+// (テナントAのpull secretで解決したprivate digestがテナントBへ返るのを回避, 空=anonymous共有)
+func cacheKey(image, keyID string) string {
+	return image + "\x00" + keyID
+}
+
 // DigestResolver: image参照をレジストリで解決しimage@digestへpinする(TTL cache付き)
 // headFuncはテスト差し替え用。両controllerで1インスタンスを共有する
 type DigestResolver struct {
@@ -75,13 +84,15 @@ func registryHead(ctx context.Context, image string, keychain authn.Keychain) (s
 }
 
 // Pinned: imageをimage@digestへ解決する。digest指定済みならそのまま
+// keyIDはpull secret由来の認証コンテキスト識別子でcacheをテナント分離する
 // 失敗時はTTL切れでもcacheがあればstaleを返す(pin↔非pinのflapでpodを無駄にrollさせない)
-func (r *DigestResolver) Pinned(ctx context.Context, image string, keychain authn.Keychain) (string, error) {
+func (r *DigestResolver) Pinned(ctx context.Context, image string, keychain authn.Keychain, keyID string) (string, error) {
 	if strings.Contains(image, "@") {
 		return image, nil
 	}
+	key := cacheKey(image, keyID)
 	r.mu.Lock()
-	entry, ok := r.cache[image]
+	entry, ok := r.cache[key]
 	r.mu.Unlock()
 	if ok && time.Since(entry.resolvedAt) < digestResolveTTL {
 		return image + "@" + entry.digest, nil
@@ -94,7 +105,32 @@ func (r *DigestResolver) Pinned(ctx context.Context, image string, keychain auth
 		return "", err
 	}
 	r.mu.Lock()
-	r.cache[image] = digestEntry{digest: digest, resolvedAt: time.Now()}
+	r.evictLocked()
+	r.cache[key] = digestEntry{digest: digest, resolvedAt: time.Now()}
 	r.mu.Unlock()
 	return image + "@" + digest, nil
+}
+
+// evictLocked: 上限到達時に失効エントリを一掃し、なお超過なら最古を1件落とす。r.mu保持前提
+func (r *DigestResolver) evictLocked() {
+	if len(r.cache) < maxCacheEntries {
+		return
+	}
+	for k, e := range r.cache {
+		if time.Since(e.resolvedAt) >= digestResolveTTL {
+			delete(r.cache, k)
+		}
+	}
+	if len(r.cache) < maxCacheEntries {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for k, e := range r.cache {
+		if first || e.resolvedAt.Before(oldest) {
+			oldest, oldestKey, first = e.resolvedAt, k, false
+		}
+	}
+	delete(r.cache, oldestKey)
 }

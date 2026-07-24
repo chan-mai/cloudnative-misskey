@@ -9,8 +9,28 @@ CLUSTER=${E2E_CLUSTER:-cnm-e2e}
 IMG=${IMG:-cloudnative-misskey:e2e}
 CERT_MANAGER_VERSION=${CERT_MANAGER_VERSION:-v1.20.3}
 CNPG_VERSION=${CNPG_VERSION:-1.30.0}
+# 既定バージョンのマニフェストsha256。バージョン変更時は併せて更新するか空でskip
+CERT_MANAGER_SHA256=${CERT_MANAGER_SHA256:-7ee74ba06845213e96d8ceaff3d20dd51e682765c1418eddda4e8780ba082261}
+CNPG_SHA256=${CNPG_SHA256:-f8bede43fe4ee0d478c2355b204a36876b2ae4faac60f2a9452280b293da3b88}
 KIND=bin/kind
 KUSTOMIZE=bin/kustomize
+
+# apply_verified URL EXPECTED_SHA256(空でskip): DL→sha256照合→server-side apply
+apply_verified() {
+  local url="$1" want="$2" tmp got
+  tmp=$(mktemp)
+  curl -sfL "$url" -o "$tmp"
+  if [ -n "$want" ]; then
+    got=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
+    if [ "$got" != "$want" ]; then
+      echo "checksum mismatch for $url: got $got want $want" >&2
+      rm -f "$tmp"
+      exit 1
+    fi
+  fi
+  kubectl apply --server-side -f "$tmp"
+  rm -f "$tmp"
+}
 
 if ! $KIND get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
   $KIND create cluster --name "$CLUSTER" --wait 120s
@@ -18,13 +38,13 @@ fi
 kubectl config use-context "kind-$CLUSTER"
 
 echo ">>> cert-manager ${CERT_MANAGER_VERSION}"
-kubectl apply --server-side -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
+apply_verified "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml" "$CERT_MANAGER_SHA256"
 for d in cert-manager cert-manager-webhook cert-manager-cainjector; do
   kubectl -n cert-manager rollout status "deploy/$d" --timeout=180s
 done
 
 echo ">>> CloudNativePG ${CNPG_VERSION}"
-kubectl apply --server-side -f "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-${CNPG_VERSION%.*}/releases/cnpg-${CNPG_VERSION}.yaml"
+apply_verified "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-${CNPG_VERSION%.*}/releases/cnpg-${CNPG_VERSION}.yaml" "$CNPG_SHA256"
 kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=180s
 
 echo ">>> operator ${IMG}"

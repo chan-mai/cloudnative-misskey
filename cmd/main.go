@@ -21,12 +21,16 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -48,12 +52,39 @@ func init() {
 	utilruntime.Must(misskeyv1beta1.AddToScheme(scheme))
 }
 
+// splitCSV: カンマ区切りをtrim+空要素除去でスライス化
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
 	var driftResyncInterval time.Duration
+	var watchNamespaces string
+	var allowedImageRegistries string
+	var allowedClusterIssuers string
+	flag.StringVar(&watchNamespaces, "watch-namespaces", "",
+		"Comma-separated namespaces to watch. Empty watches all namespaces (cluster-scoped). "+
+			"When set, namespaced resources (Misskey and its children) can be granted via per-namespace "+
+			"RoleBindings, but the cluster-scoped MisskeyChannel CRD still requires a small ClusterRole "+
+			"for get;list;watch on misskeychannels.")
+	flag.StringVar(&allowedImageRegistries, "allowed-image-registries", "",
+		"Comma-separated allowed image reference prefixes. Empty allows any. When set, the webhook "+
+			"rejects spec.image/objectStorage.image/MisskeyChannel.image outside the list.")
+	flag.StringVar(&allowedClusterIssuers, "allowed-cluster-issuers", "",
+		"Comma-separated allowed cert-manager ClusterIssuer names for spec.ingress.issuerRef. Empty allows any.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -85,9 +116,30 @@ func main() {
 		metricsOpts.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
+	// namespaced運用: --watch-namespaces指定時はinformer cacheを限定し、ClusterRoleでなく
+	// namespace別RoleBindingで縛れるようにする(マルチテナントのブラスト半径縮小)
+	cacheOpts := cache.Options{}
+	if watchNamespaces != "" {
+		defaults := map[string]cache.Config{}
+		for _, ns := range strings.Split(watchNamespaces, ",") {
+			if ns = strings.TrimSpace(ns); ns != "" {
+				defaults[ns] = cache.Config{}
+			}
+		}
+		cacheOpts.DefaultNamespaces = defaults
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsOpts,
+		Cache:   cacheOpts,
+		// SecretはキャッシュせずにAPI直読(cluster全Secretのinformerキャッシュ肥大を防ぐ)
+		// 併せてSecretのwatch/Ownsを外しRBACのlist/watch権限も落とす(get中心へ縮小)
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.Secret{}},
+			},
+		},
 		WebhookServer: webhook.NewServer(webhook.Options{
 			TLSOpts: []func(*tls.Config){disableHTTP2},
 		}),
@@ -122,8 +174,14 @@ func main() {
 
 	// webhookはcert必須のためlocal実行等ではENABLE_WEBHOOKS=falseで無効化
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1beta1.SetupMisskeyWebhookWithManager(mgr); err != nil {
+		imageAllow := splitCSV(allowedImageRegistries)
+		issuerAllow := splitCSV(allowedClusterIssuers)
+		if err := webhookv1beta1.SetupMisskeyWebhookWithManager(mgr, imageAllow, issuerAllow); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Misskey")
+			os.Exit(1)
+		}
+		if err := webhookv1beta1.SetupMisskeyChannelWebhookWithManager(mgr, imageAllow); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "MisskeyChannel")
 			os.Exit(1)
 		}
 	}

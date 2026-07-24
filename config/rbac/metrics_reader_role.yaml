@@ -1,0 +1,11 @@
+# Grants /metrics scrape access. Bind (ClusterRoleBinding) to the ServiceAccount
+# of your metrics scraper (e.g. Prometheus) to read the manager's metrics endpoint.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metrics-reader
+rules:
+  - nonResourceURLs:
+      - "/metrics"
+    verbs:
+      - get

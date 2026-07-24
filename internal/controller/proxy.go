@@ -47,6 +47,7 @@ func buildCaddyPodSpec(m *misskeyv1beta1.Misskey, withMaintenanceHTML bool) core
 		{Name: "caddy-data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "caddy-config-tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "caddy-bin", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		tmpVolume(),
 	}
 
 	mounts := []corev1.VolumeMount{
@@ -54,6 +55,7 @@ func buildCaddyPodSpec(m *misskeyv1beta1.Misskey, withMaintenanceHTML bool) core
 		{Name: "caddy-data", MountPath: "/data"},
 		{Name: "caddy-config-tmp", MountPath: "/config"},
 		{Name: "caddy-bin", MountPath: "/caddy-bin"},
+		tmpMount(),
 	}
 
 	if withMaintenanceHTML {
@@ -74,8 +76,9 @@ func buildCaddyPodSpec(m *misskeyv1beta1.Misskey, withMaintenanceHTML bool) core
 	}
 
 	return corev1.PodSpec{
-		SecurityContext:           nonRootPodSecurityContext(genericNonRootUID),
-		TopologySpreadConstraints: spreadConstraints(labelsFor(m, "proxy")),
+		AutomountServiceAccountToken: boolPtr(false),
+		SecurityContext:              nonRootPodSecurityContext(genericNonRootUID),
+		TopologySpreadConstraints:    spreadConstraints(labelsFor(m, "proxy")),
 		InitContainers: []corev1.Container{
 			{
 				Name:            "prepare-caddy",

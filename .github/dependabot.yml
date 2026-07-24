@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Goモジュール
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  # GitHub Actions(SHA固定を追従更新)
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # Dockerベースイメージ(digest固定を追従更新)
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly

@@ -63,6 +63,76 @@ func TestValidateCreateOK(t *testing.T) {
 	}
 }
 
+func TestValidateImageAllowlist(t *testing.T) {
+	v := &MisskeyCustomValidator{AllowedImageRegistries: []string{"ghcr.io/trusted/"}}
+	// 許可外imageは拒否
+	m := base()
+	m.Spec.Image = "misskey/misskey:x"
+	if _, err := v.ValidateCreate(context.Background(), m); err == nil {
+		t.Error("image outside allowlist must be rejected")
+	}
+	// 許可prefixに一致すれば通る
+	m.Spec.Image = "ghcr.io/trusted/misskey:x"
+	if _, err := v.ValidateCreate(context.Background(), m); err != nil {
+		t.Errorf("allowed image rejected: %v", err)
+	}
+	// 空allowlistは全許可
+	if _, err := (&MisskeyCustomValidator{}).ValidateCreate(context.Background(), base()); err != nil {
+		t.Errorf("empty allowlist must allow any: %v", err)
+	}
+	// spec.image以外(proxy/postgres/redis HA/meili等)も許可リスト対象
+	for _, tc := range []func(*misskeyv1beta1.Misskey){
+		func(x *misskeyv1beta1.Misskey) { x.Spec.Proxy.Image = "evil/caddy:2" },
+		func(x *misskeyv1beta1.Misskey) { x.Spec.Postgres.Image = "evil/pg:16" },
+		func(x *misskeyv1beta1.Misskey) { x.Spec.Redis.Image = "evil/redis:8" },
+		func(x *misskeyv1beta1.Misskey) {
+			x.Spec.Redis.HA = &misskeyv1beta1.RedisHA{Image: "evil/redis:8"}
+		},
+		func(x *misskeyv1beta1.Misskey) { x.Spec.Search.Meilisearch.Image = "evil/meili:v1" },
+	} {
+		mm := base()
+		mm.Spec.Image = "ghcr.io/trusted/misskey:x"
+		tc(mm)
+		if _, err := v.ValidateCreate(context.Background(), mm); err == nil {
+			t.Error("non-spec.image field outside allowlist must be rejected")
+		}
+	}
+}
+
+func TestValidateClusterIssuerAllowlist(t *testing.T) {
+	v := &MisskeyCustomValidator{AllowedClusterIssuers: []string{"letsencrypt"}}
+	m := base()
+	m.Spec.Ingress.IssuerRef = &misskeyv1beta1.IngressIssuerRef{Name: "rogue"}
+	if _, err := v.ValidateCreate(context.Background(), m); err == nil {
+		t.Error("disallowed ClusterIssuer must be rejected")
+	}
+	// namespaced Issuerは許可リスト対象外
+	m.Spec.Ingress.IssuerRef = &misskeyv1beta1.IngressIssuerRef{Name: "rogue", Kind: "Issuer"}
+	if _, err := v.ValidateCreate(context.Background(), m); err != nil {
+		t.Errorf("namespaced Issuer must not be gated: %v", err)
+	}
+	// 許可名は通る
+	m.Spec.Ingress.IssuerRef = &misskeyv1beta1.IngressIssuerRef{Name: "letsencrypt"}
+	if _, err := v.ValidateCreate(context.Background(), m); err != nil {
+		t.Errorf("allowed ClusterIssuer rejected: %v", err)
+	}
+}
+
+func TestValidateChannelImageAllowlist(t *testing.T) {
+	v := &MisskeyChannelCustomValidator{AllowedImageRegistries: []string{"ghcr.io/trusted/"}}
+	ch := &misskeyv1beta1.MisskeyChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "c"},
+		Spec:       misskeyv1beta1.MisskeyChannelSpec{Image: "evil/img:latest"},
+	}
+	if _, err := v.ValidateCreate(context.Background(), ch); err == nil {
+		t.Error("channel image outside allowlist must be rejected")
+	}
+	ch.Spec.Image = "ghcr.io/trusted/misskey:1"
+	if _, err := v.ValidateCreate(context.Background(), ch); err != nil {
+		t.Errorf("allowed channel image rejected: %v", err)
+	}
+}
+
 func TestAdvisoryWarnings(t *testing.T) {
 	// external DB + readOffload → 効かない旨の警告(エラーではない)
 	m := base()

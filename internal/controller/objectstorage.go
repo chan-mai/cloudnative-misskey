@@ -351,9 +351,10 @@ func buildObjectStorageJob(m *misskeyv1beta1.Misskey, p plan, name string, objEn
 	env = append(env, objEnv...)
 
 	pod := corev1.PodSpec{
-		RestartPolicy:    corev1.RestartPolicyOnFailure,
-		ImagePullSecrets: m.Spec.ImagePullSecrets,
-		SecurityContext:  nonRootPodSecurityContext(genericNonRootUID),
+		AutomountServiceAccountToken: boolPtr(false),
+		RestartPolicy:                corev1.RestartPolicyOnFailure,
+		ImagePullSecrets:             m.Spec.ImagePullSecrets,
+		SecurityContext:              nonRootPodSecurityContext(genericNonRootUID),
 		Containers: []corev1.Container{{
 			Name:            "objectstorage",
 			Image:           p.objImage,
@@ -361,16 +362,19 @@ func buildObjectStorageJob(m *misskeyv1beta1.Misskey, p plan, name string, objEn
 			Env:             env,
 			SecurityContext: restrictedContainerSecurityContext(),
 			Resources:       resourcesOr(corev1.ResourceRequirements{}, "50m", "64Mi", "128Mi"),
-			VolumeMounts:    []corev1.VolumeMount{{Name: "sql", MountPath: "/sql", ReadOnly: true}},
+			VolumeMounts:    []corev1.VolumeMount{{Name: "sql", MountPath: "/sql", ReadOnly: true}, tmpMount()},
 		}},
-		Volumes: []corev1.Volume{{
-			Name: "sql",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: nameObjectStorageSQL(m)},
+		Volumes: []corev1.Volume{
+			{
+				Name: "sql",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: nameObjectStorageSQL(m)},
+					},
 				},
 			},
-		}},
+			tmpVolume(),
+		},
 	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.Namespace, Labels: labelsFor(m, "objstorage")},

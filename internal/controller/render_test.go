@@ -393,15 +393,15 @@ func TestRenderDefaultYMLMeilisearch(t *testing.T) {
 	out := renderDefaultYML(m, resolve(m))
 
 	mustContain := []string{
-		"url: https://misskey.example.com/",
-		"host: example-db-rw",
-		"user: misskey",
+		`url: "https://misskey.example.com/"`,
+		`host: "example-db-rw"`,
+		`user: "misskey"`,
 		"pass: ${DB_PASSWORD}",
-		"host: example-redis",
+		`host: "example-redis"`,
 		"provider: meilisearch",
-		"host: example-meilisearch",
+		`host: "example-meilisearch"`,
 		"apiKey: ${MEILI_KEY}",
-		"index: misskey-example-com",
+		`index: "misskey-example-com"`,
 		"setupPassword: ${SETUP_PASSWORD}",
 		"id: 'aidx'",
 		"maxFileSize: 100",
@@ -414,6 +414,38 @@ func TestRenderDefaultYMLMeilisearch(t *testing.T) {
 	// シークレットはプレースホルダのまま。実値は描画されない
 	if strings.Contains(out, "MEILI_MASTER_KEY") {
 		t.Errorf("default.yml unexpectedly contains a secret key name")
+	}
+}
+
+func TestRenderRedisBlockExternalTLS(t *testing.T) {
+	on := true
+	m := newMisskey()
+	m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.ext.svc", TLS: &on}
+	out := renderDefaultYML(m, resolve(m))
+	if !strings.Contains(out, "tls: {}") {
+		t.Errorf("external redis TLS must emit tls: {}\n%s", out)
+	}
+	// TLS未指定は出力しない
+	m2 := newMisskey()
+	m2.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.ext.svc"}
+	if strings.Contains(renderDefaultYML(m2, resolve(m2)), "tls:") {
+		t.Error("no TLS field must not emit tls:")
+	}
+}
+
+func TestTruncateMsg(t *testing.T) {
+	// 上限以内はそのまま
+	if got := truncateMsg("short"); got != "short" {
+		t.Errorf("short passthrough: %q", got)
+	}
+	// 接尾辞込みで1024バイト以内
+	long := strings.Repeat("a", 5000)
+	got := truncateMsg(long)
+	if len(got) > 1024 {
+		t.Errorf("truncated length %d exceeds 1024", len(got))
+	}
+	if !strings.HasSuffix(got, "(truncated)") {
+		t.Errorf("missing truncation suffix: ...%q", got[len(got)-20:])
 	}
 }
 
@@ -458,11 +490,11 @@ func TestRenderDefaultYMLPerformanceProxyFiles(t *testing.T) {
 		"relationshipJobPerSec: 16",
 		"deliverJobMaxAttempts: 10",
 		"inboxJobMaxAttempts: 8",
-		"proxy: http://proxy:3128",
-		"proxySmtp: http://proxy:3128",
-		"proxyBypassHosts: [hcaptcha.com, challenges.cloudflare.com]",
+		`proxy: "http://proxy:3128"`,
+		`proxySmtp: "http://proxy:3128"`,
+		`proxyBypassHosts: ["hcaptcha.com", "challenges.cloudflare.com"]`,
 		"maxFileSize: 262144000",
-		"mediaProxy: https://mp.example.com/proxy",
+		`mediaProxy: "https://mp.example.com/proxy"`,
 		"proxyRemoteFiles: false",
 	} {
 		if !strings.Contains(out, s) {
@@ -791,7 +823,7 @@ func TestRenderDefaultYMLReadOffload(t *testing.T) {
 	m := newMisskey()
 	m.Spec.Postgres.Instances = 2
 	out := renderDefaultYML(m, resolve(m))
-	for _, s := range []string{"dbReplications: true", "dbSlaves:", "host: example-db-ro", "pass: ${DB_PASSWORD}"} {
+	for _, s := range []string{"dbReplications: true", "dbSlaves:", `host: "example-db-ro"`, "pass: ${DB_PASSWORD}"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("read-offload default.yml missing %q\n---\n%s", s, out)
 		}
@@ -815,7 +847,7 @@ func TestMigratePlanPrimaryDirect(t *testing.T) {
 		t.Errorf("migration must not use replicas: %+v", mp)
 	}
 	out := renderDefaultYML(m, mp)
-	if !strings.Contains(out, "host: example-db-rw") || !strings.Contains(out, "dbReplications: false") {
+	if !strings.Contains(out, `host: "example-db-rw"`) || !strings.Contains(out, "dbReplications: false") {
 		t.Errorf("migrate config not primary-direct:\n%s", out)
 	}
 }
@@ -1157,10 +1189,35 @@ func TestIngressAnnotationsIssuerRef(t *testing.T) {
 	if _, ok := ann["cert-manager.io/cluster-issuer"]; ok {
 		t.Errorf("both issuer annotations set: %+v", ann)
 	}
-	// ユーザannotationが優先
+	// operator管理キー(cert-manager)はユーザ指定で上書きできない(後勝ち)
 	m.Spec.Ingress.Annotations = map[string]string{"cert-manager.io/issuer": "custom"}
-	if ann = ingressAnnotations(m, "nginx"); ann["cert-manager.io/issuer"] != "custom" {
-		t.Errorf("user annotation must win: %+v", ann)
+	if ann = ingressAnnotations(m, "nginx"); ann["cert-manager.io/issuer"] != "letsencrypt" {
+		t.Errorf("operator cert-manager annotation must win over user override: %+v", ann)
+	}
+}
+
+func TestIngressAnnotationsDenylist(t *testing.T) {
+	m := newMisskey()
+	m.Spec.Ingress.Annotations = map[string]string{
+		"nginx.ingress.kubernetes.io/configuration-snippet": "return 200 pwned;",
+		"nginx.ingress.kubernetes.io/server-snippet":        "location / {}",
+		"nginx.ingress.kubernetes.io/auth-url":              "http://evil/auth",
+		"nginx.ingress.kubernetes.io/auth-tls-secret":       "ns/secret",
+		"nginx.ingress.kubernetes.io/proxy-connect-timeout": "5", // 良性は残す
+	}
+	ann := ingressAnnotations(m, "nginx")
+	for _, k := range []string{
+		"nginx.ingress.kubernetes.io/configuration-snippet",
+		"nginx.ingress.kubernetes.io/server-snippet",
+		"nginx.ingress.kubernetes.io/auth-url",
+		"nginx.ingress.kubernetes.io/auth-tls-secret",
+	} {
+		if _, ok := ann[k]; ok {
+			t.Errorf("dangerous annotation %q must be dropped: %+v", k, ann)
+		}
+	}
+	if ann["nginx.ingress.kubernetes.io/proxy-connect-timeout"] != "5" {
+		t.Errorf("benign annotation must pass through: %+v", ann)
 	}
 }
 
@@ -1174,35 +1231,57 @@ func TestDigestResolverPinned(t *testing.T) {
 	}
 
 	// digest指定済みはレジストリに触れずそのまま
-	if got, err := dr.Pinned(ctx, "img:v1@sha256:zzz", nil); err != nil || got != "img:v1@sha256:zzz" || calls != 0 {
+	if got, err := dr.Pinned(ctx, "img:v1@sha256:zzz", nil, ""); err != nil || got != "img:v1@sha256:zzz" || calls != 0 {
 		t.Errorf("pre-pinned passthrough: %v %v calls=%d", got, err, calls)
 	}
 	// 解決+TTL内cache
-	if got, _ := dr.Pinned(ctx, "img:latest", nil); got != "img:latest@sha256:aaa" {
+	if got, _ := dr.Pinned(ctx, "img:latest", nil, ""); got != "img:latest@sha256:aaa" {
 		t.Errorf("pinned: %v", got)
 	}
-	if _, _ = dr.Pinned(ctx, "img:latest", nil); calls != 1 {
+	if _, _ = dr.Pinned(ctx, "img:latest", nil, ""); calls != 1 {
 		t.Errorf("cache should be used within TTL: calls=%d", calls)
 	}
 	// TTL切れで再解決
-	dr.cache["img:latest"] = digestEntry{digest: "sha256:aaa", resolvedAt: time.Now().Add(-time.Hour)}
+	dr.cache[cacheKey("img:latest", "")] = digestEntry{digest: "sha256:aaa", resolvedAt: time.Now().Add(-time.Hour)}
 	dr.headFunc = func(_ context.Context, _ string, _ authn.Keychain) (string, error) {
 		return "sha256:bbb", nil
 	}
-	if got, _ := dr.Pinned(ctx, "img:latest", nil); got != "img:latest@sha256:bbb" {
+	if got, _ := dr.Pinned(ctx, "img:latest", nil, ""); got != "img:latest@sha256:bbb" {
 		t.Errorf("re-resolve after TTL expiry: %v", got)
 	}
 	// 失敗時はstale cacheへfallback
-	dr.cache["img:latest"] = digestEntry{digest: "sha256:bbb", resolvedAt: time.Now().Add(-time.Hour)}
+	dr.cache[cacheKey("img:latest", "")] = digestEntry{digest: "sha256:bbb", resolvedAt: time.Now().Add(-time.Hour)}
 	dr.headFunc = func(_ context.Context, _ string, _ authn.Keychain) (string, error) {
 		return "", fmt.Errorf("registry down")
 	}
-	if got, err := dr.Pinned(ctx, "img:latest", nil); err != nil || got != "img:latest@sha256:bbb" {
+	if got, err := dr.Pinned(ctx, "img:latest", nil, ""); err != nil || got != "img:latest@sha256:bbb" {
 		t.Errorf("stale fallback: %v %v", got, err)
 	}
 	// cache無しの失敗はエラー
-	if _, err := dr.Pinned(ctx, "other:latest", nil); err == nil {
+	if _, err := dr.Pinned(ctx, "other:latest", nil, ""); err == nil {
 		t.Error("failure without cache should be an error")
+	}
+}
+
+// keyIDが異なればcacheを共有せず、テナント跨ぎでprivate digestが漏れない
+func TestDigestResolverKeyIsolation(t *testing.T) {
+	ctx := t.Context()
+	got := map[string]int{}
+	dr := NewDigestResolver()
+	dr.headFunc = func(_ context.Context, _ string, _ authn.Keychain) (string, error) {
+		got["calls"]++
+		return "sha256:aaa", nil
+	}
+	// テナントA(keyID="ns-a")で解決
+	if _, err := dr.Pinned(ctx, "priv:latest", nil, "ns-a"); err != nil {
+		t.Fatalf("tenant A resolve: %v", err)
+	}
+	// テナントB(keyID="ns-b")は別keyのため再解決される(A のcacheヒットで即返さない)
+	if _, err := dr.Pinned(ctx, "priv:latest", nil, "ns-b"); err != nil {
+		t.Fatalf("tenant B resolve: %v", err)
+	}
+	if got["calls"] != 2 {
+		t.Errorf("different keyID must not share cache: calls=%d", got["calls"])
 	}
 }
 
@@ -1545,7 +1624,7 @@ func TestRenderRedisBlockSentinel(t *testing.T) {
 	var b strings.Builder
 	renderRedisBlock(func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }, "redis", ep)
 	out := b.String()
-	for _, s := range []string{"sentinels:", "- host: s", "port: 26379", "name: mymaster"} {
+	for _, s := range []string{"sentinels:", `- host: "s"`, "port: 26379", `name: "mymaster"`} {
 		if !strings.Contains(out, s) {
 			t.Errorf("sentinel block missing %q\n%s", s, out)
 		}
@@ -1562,7 +1641,7 @@ func TestRenderDefaultYMLRedisRolesAndHA(t *testing.T) {
 	}
 	out := renderDefaultYML(m, resolve(m))
 	// default redisとjobQueueはHA sentinel、pubsubはstandalone(sentinelなし)
-	for _, s := range []string{"redis:", "sentinels:", "name: mymaster", "redisForJobQueue:", "host: example-redis-jobqueue-ha-sentinel", "redisForPubsub:", "host: example-redis-pubsub"} {
+	for _, s := range []string{"redis:", "sentinels:", `name: "mymaster"`, "redisForJobQueue:", `host: "example-redis-jobqueue-ha-sentinel"`, "redisForPubsub:", `host: "example-redis-pubsub"`} {
 		if !strings.Contains(out, s) {
 			t.Errorf("expected %q in\n%s", s, out)
 		}

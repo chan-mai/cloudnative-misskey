@@ -50,3 +50,23 @@ webhooks:
     resources:
     - misskeys
   sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-cloudnative-misskey-dev-v1beta1-misskeychannel
+  failurePolicy: Fail
+  name: vmisskeychannel-v1beta1.kb.io
+  rules:
+  - apiGroups:
+    - cloudnative-misskey.dev
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - misskeychannels
+  sideEffects: None

@@ -51,6 +51,7 @@ type redisEndpoint struct {
 	passEnv    string                    // passSel使用時のプレースホルダenv名(REDIS_PASSWORD / REDIS_PASSWORD_<ROLE>)
 	managed    bool                      // operatorが建てる
 	ha         bool                      // Sentinel HAモード
+	enableTLS  bool                      // external redisのTLS(KEDA triggerへ伝播)
 }
 
 // 1インスタンス分の解決済み接続パラメータを保持
@@ -296,11 +297,12 @@ func objectStorageColumns(c *misskeyv1beta1.ObjectStorageColumns) map[string]str
 // externalRedisEndpoint: ExternalRedisをendpointへ。Sentinels指定でSentinelモード
 func externalRedisEndpoint(ext *misskeyv1beta1.ExternalRedis, passEnv string) redisEndpoint {
 	ep := redisEndpoint{
-		host:    ext.Host,
-		port:    int32OrDefault(ext.Port, redisPort),
-		db:      ext.DB,
-		passSel: ext.PasswordSecret,
-		passEnv: passEnv,
+		host:      ext.Host,
+		port:      int32OrDefault(ext.Port, redisPort),
+		db:        ext.DB,
+		passSel:   ext.PasswordSecret,
+		passEnv:   passEnv,
+		enableTLS: boolOr(ext.TLS, false),
 	}
 	for _, s := range ext.Sentinels {
 		ep.sentinels = append(ep.sentinels, redisHostPort{host: s.Host, port: int32OrDefault(s.Port, sentinelPort)})

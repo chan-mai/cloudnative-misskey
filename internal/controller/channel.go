@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func (r *MisskeyReconciler) resolveImage(ctx context.Context, m *misskeyv1beta1.
 	if err != nil {
 		return err
 	}
-	pinned, err := r.Digests.Pinned(ctx, m.Spec.Image, keychain)
+	pinned, err := r.Digests.Pinned(ctx, m.Spec.Image, keychain, pullSecretKeyID(m))
 	if err != nil {
 		// レジストリ不達かつcache無し(operator再起動直後等)は直前にstatusへ出したpinを継続し、
 		// bare tagへのflapによる無用なrollを避ける。それも無い初回のみエラー
@@ -104,6 +105,20 @@ func (r *MisskeyReconciler) resolveImage(ctx context.Context, m *misskeyv1beta1.
 	return nil
 }
 
+// pullSecretKeyID: digest cacheの認証コンテキスト識別子
+// pull secretのnamespace+名前集合でテナント跨ぎのprivate digest共有を防ぐ(無指定は空=公開image共有)
+func pullSecretKeyID(m *misskeyv1beta1.Misskey) string {
+	if len(m.Spec.ImagePullSecrets) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(m.Spec.ImagePullSecrets))
+	for _, ref := range m.Spec.ImagePullSecrets {
+		names = append(names, ref.Name)
+	}
+	sort.Strings(names)
+	return m.Namespace + "\x00" + strings.Join(names, ",")
+}
+
 // pullSecretKeychain: imagePullSecretsからレジストリ認証keychainを構築(未指定はnil=anonymous)
 func (r *MisskeyReconciler) pullSecretKeychain(ctx context.Context, m *misskeyv1beta1.Misskey) (authn.Keychain, error) {
 	if len(m.Spec.ImagePullSecrets) == 0 {
@@ -112,6 +127,7 @@ func (r *MisskeyReconciler) pullSecretKeychain(ctx context.Context, m *misskeyv1
 	secrets := make([]corev1.Secret, 0, len(m.Spec.ImagePullSecrets))
 	for _, ref := range m.Spec.ImagePullSecrets {
 		s := corev1.Secret{}
+		// SecretはClientキャッシュ無効(DisableFor)のためAPI直読
 		if err := r.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: m.Namespace}, &s); err != nil {
 			return nil, fmt.Errorf("imagePullSecret %q: %w", ref.Name, err)
 		}

@@ -97,8 +97,12 @@ func (r *MisskeyReconciler) reconcileApp(ctx context.Context, m *misskeyv1beta1.
 	sc := appScaleConfig(m.Spec.App.Autoscaling)
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameApp(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
+		cs, err := r.misskeyChecksum(ctx, m, p)
+		if err != nil {
+			return err
+		}
 		pod := buildMisskeyPodSpec(m, p, roleApp, m.Spec.App.ComponentSpec)
-		setDeployment(dep, m, roleApp, resumeReplicas(m.Spec.App.ComponentSpec, sc, dep), pod, r.misskeyChecksum(ctx, m, p))
+		setDeployment(dep, m, roleApp, resumeReplicas(m.Spec.App.ComponentSpec, sc, dep), pod, cs)
 		return nil
 	}); err != nil {
 		return err
@@ -114,8 +118,12 @@ func (r *MisskeyReconciler) reconcileWorker(ctx context.Context, m *misskeyv1bet
 	sc := workerScaleConfig(m.Spec.Worker.Autoscaling)
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: nameWorker(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, dep, func() error {
+		cs, err := r.misskeyChecksum(ctx, m, p)
+		if err != nil {
+			return err
+		}
 		pod := buildMisskeyPodSpec(m, p, roleWorker, m.Spec.Worker.ComponentSpec)
-		setDeployment(dep, m, roleWorker, resumeReplicas(m.Spec.Worker.ComponentSpec, sc, dep), pod, r.misskeyChecksum(ctx, m, p))
+		setDeployment(dep, m, roleWorker, resumeReplicas(m.Spec.Worker.ComponentSpec, sc, dep), pod, cs)
 		return nil
 	}); err != nil {
 		return err
@@ -178,13 +186,17 @@ func (r *MisskeyReconciler) suspendWorkloads(ctx context.Context, m *misskeyv1be
 // misskeyChecksum: app/worker podテンプレートのchecksum annotation
 // config本文+参照SecretのresourceVersion。objectStorage(autoConfigure時)も含め、
 // meta直書きはpub/sub非発火のため設定/カラム/資格情報変更でpodをrollし古いmeta cacheを畳む
-func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) map[string]string {
-	parts := append([]string{renderDefaultYML(m, p)}, r.referencedSecretVersions(ctx, m, p)...)
+func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (map[string]string, error) {
+	versions, err := r.referencedSecretVersions(ctx, m, p)
+	if err != nil {
+		return nil, err
+	}
+	parts := append([]string{renderDefaultYML(m, p)}, versions...)
 	if p.objAutoConfigure {
 		if assigns, err := objectStorageAssignments(p); err == nil {
 			sql := renderObjectStorageSQL(assigns)
 			parts = append(parts, r.objectStorageHash(ctx, m, p, sql, assigns))
 		}
 	}
-	return checksumAnnotation(parts...)
+	return checksumAnnotation(parts...), nil
 }

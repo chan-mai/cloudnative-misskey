@@ -23,12 +23,41 @@ import (
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	"sigs.k8s.io/yaml"
 
 	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
+
+// imageAllowed: allowed空なら全許可、非空ならいずれかのprefix一致で許可
+func imageAllowed(image string, allowed []string) bool {
+	if image == "" || len(allowed) == 0 {
+		return true
+	}
+	for _, a := range allowed {
+		if strings.HasPrefix(image, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameAllowed: allowed空なら全許可、非空なら完全一致で許可
+func nameAllowed(name string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, a := range allowed {
+		if name == a {
+			return true
+		}
+	}
+	return false
+}
 
 // operatorがdefault.ymlへ出力するトップレベルキー(controller側renderDefaultYMLと同期)
 // extraConfigとの重複はjs-yamlのduplicated mapping keyエラーでMisskeyが起動しなくなる
@@ -53,10 +82,13 @@ var reservedConfigKeys = map[string]bool{
 // (XValidation)で常時強制しており、webhook未導入でも効きます。webhookはCELで
 // 表せない項目だけを担当します: tenant未設定→namespaceのdefault(「未設定→初回設定」の
 // 穴を塞ぐ)と、エラーにするほどでない補助的な警告です。
-func SetupMisskeyWebhookWithManager(mgr ctrl.Manager) error {
+func SetupMisskeyWebhookWithManager(mgr ctrl.Manager, allowedImageRegistries, allowedClusterIssuers []string) error {
 	return ctrl.NewWebhookManagedBy(mgr, &misskeyv1beta1.Misskey{}).
 		WithDefaulter(&MisskeyCustomDefaulter{}).
-		WithValidator(&MisskeyCustomValidator{}).
+		WithValidator(&MisskeyCustomValidator{
+			AllowedImageRegistries: allowedImageRegistries,
+			AllowedClusterIssuers:  allowedClusterIssuers,
+		}).
 		Complete()
 }
 
@@ -77,21 +109,87 @@ func (d *MisskeyCustomDefaulter) Default(_ context.Context, m *misskeyv1beta1.Mi
 
 // +kubebuilder:webhook:path=/validate-cloudnative-misskey-dev-v1beta1-misskey,mutating=false,failurePolicy=fail,sideEffects=None,groups=cloudnative-misskey.dev,resources=misskeys,verbs=create;update,versions=v1beta1,name=vmisskey-v1beta1.kb.io,admissionReviewVersions=v1
 
-// MisskeyCustomValidator: CELで表せない補助的な警告のみ(エラーはCELが常時強制)
-type MisskeyCustomValidator struct{}
+// MisskeyCustomValidator: CELで表せない補助的な警告 + flag由来の許可リスト強制(拒否)
+// 許可リストは運用者指定でCELに埋め込めないためwebhook層で担当する
+type MisskeyCustomValidator struct {
+	AllowedImageRegistries []string
+	AllowedClusterIssuers  []string
+}
 
 var _ admission.Validator[*misskeyv1beta1.Misskey] = &MisskeyCustomValidator{}
 
 func (v *MisskeyCustomValidator) ValidateCreate(_ context.Context, m *misskeyv1beta1.Misskey) (admission.Warnings, error) {
+	if err := v.validate(m); err != nil {
+		return nil, err
+	}
 	return advisoryWarnings(m), nil
 }
 
 func (v *MisskeyCustomValidator) ValidateUpdate(_ context.Context, _, newObj *misskeyv1beta1.Misskey) (admission.Warnings, error) {
+	if err := v.validate(newObj); err != nil {
+		return nil, err
+	}
 	return advisoryWarnings(newObj), nil
 }
 
 func (v *MisskeyCustomValidator) ValidateDelete(_ context.Context, _ *misskeyv1beta1.Misskey) (admission.Warnings, error) {
 	return nil, nil
+}
+
+// specImages: CRから指定できる全imageを fieldPath→image で返す(空は除外)
+// レンダリング前の共通検証で、許可リストを全image入力へ適用するため
+func specImages(m *misskeyv1beta1.Misskey) map[string]string {
+	out := map[string]string{}
+	add := func(path, img string) {
+		if img != "" {
+			out[path] = img
+		}
+	}
+	add("spec.image", m.Spec.Image)
+	add("spec.proxy.image", m.Spec.Proxy.Image)
+	add("spec.postgres.image", m.Spec.Postgres.Image)
+	add("spec.redis.image", m.Spec.Redis.Image)
+	if ha := m.Spec.Redis.HA; ha != nil {
+		add("spec.redis.ha.image", ha.Image)
+		add("spec.redis.ha.sentinelImage", ha.SentinelImage)
+	}
+	if roles := m.Spec.Redis.Roles; roles != nil {
+		for name, role := range map[string]*misskeyv1beta1.RedisRole{
+			"jobQueue": roles.JobQueue, "pubsub": roles.Pubsub,
+			"timelines": roles.Timelines, "reactions": roles.Reactions,
+		} {
+			if role != nil && role.HA != nil {
+				add("spec.redis.roles."+name+".ha.image", role.HA.Image)
+				add("spec.redis.roles."+name+".ha.sentinelImage", role.HA.SentinelImage)
+			}
+		}
+	}
+	add("spec.search.meilisearch.image", m.Spec.Search.Meilisearch.Image)
+	if os := m.Spec.ObjectStorage; os != nil {
+		add("spec.objectStorage.image", os.Image)
+	}
+	add("spec.monitoring.redisExporterImage", m.Spec.Monitoring.RedisExporterImage)
+	return out
+}
+
+// validate: 許可リスト違反をfield errorで拒否
+func (v *MisskeyCustomValidator) validate(m *misskeyv1beta1.Misskey) error {
+	var errs field.ErrorList
+	for path, img := range specImages(m) {
+		if !imageAllowed(img, v.AllowedImageRegistries) {
+			errs = append(errs, field.Invalid(field.NewPath(path), img,
+				"image registry is not in the allowed list (--allowed-image-registries)"))
+		}
+	}
+	// ClusterIssuer参照のみ許可リスト適用(namespaced Issuerは同一namespace内で対象外)
+	if ref := m.Spec.Ingress.IssuerRef; ref != nil && ref.Kind != "Issuer" && !nameAllowed(ref.Name, v.AllowedClusterIssuers) {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "ingress", "issuerRef", "name"), ref.Name,
+			"ClusterIssuer is not in the allowed list (--allowed-cluster-issuers)"))
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return apierrors.NewInvalid(schema.GroupKind{Group: "cloudnative-misskey.dev", Kind: "Misskey"}, m.Name, errs)
 }
 
 // advisoryWarnings: エラーにはしないが利用者に気づかせたい設定を警告として返す
@@ -129,6 +227,17 @@ func advisoryWarnings(m *misskeyv1beta1.Misskey) admission.Warnings {
 		if os.SetPublicRead != nil && *os.SetPublicRead && strings.Contains(os.Endpoint, "r2.cloudflarestorage.com") {
 			warns = append(warns, "spec.objectStorage.setPublicRead must be false for Cloudflare R2 (it does not support object ACLs)")
 		}
+	}
+	// import接続のsslModeが弱いと中間者による平文降格・傍受の余地
+	if imp := pg.Import; imp != nil {
+		switch imp.Source.SSLMode {
+		case "disable", "allow", "prefer", "":
+			warns = append(warns, "spec.postgres.import.source.sslMode is weaker than require; use require or verify-full to prevent a man-in-the-middle downgrade of the import connection")
+		}
+	}
+	// http URLは連合先へ平文で公開される
+	if strings.HasPrefix(m.Spec.URL, "http://") {
+		warns = append(warns, "spec.url uses http://; federated peers will see a plaintext URL. Prefer https://")
 	}
 	warns = append(warns, extraConfigWarnings(m.Spec.ExtraConfig)...)
 	return warns

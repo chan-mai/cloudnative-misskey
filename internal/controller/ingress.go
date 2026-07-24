@@ -27,11 +27,17 @@ import (
 	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
 
-// クラス固有の既定値とユーザのannotationをマージ(ユーザ優先)
-// nginxではproxy-body-sizeを引き上げる。既定1MBだとメディアアップロードが弾かれるため
-// issuerRef設定時はcert-managerのissuer annotationを注入
+// クラス固有の既定値とユーザのannotationをマージ
+// ユーザ指定を先に適用し(危険キーは除外)、operator管理キー(cert-manager/proxy-body-size)を
+// 後段で上書きして後勝ちにする。nginxではproxy-body-sizeを引き上げる(既定1MBだとメディア弾き)
 func ingressAnnotations(m *misskeyv1beta1.Misskey, className string) map[string]string {
 	out := map[string]string{}
+	for k, v := range m.Spec.Ingress.Annotations {
+		if isDangerousIngressAnnotation(k) {
+			continue
+		}
+		out[k] = v
+	}
 	if strings.Contains(className, "nginx") {
 		out["nginx.ingress.kubernetes.io/proxy-body-size"] = "0"
 	}
@@ -42,13 +48,32 @@ func ingressAnnotations(m *misskeyv1beta1.Misskey, className string) map[string]
 		}
 		out[key] = ref.Name
 	}
-	for k, v := range m.Spec.Ingress.Annotations {
-		out[k] = v
-	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// isDangerousIngressAnnotation: Ingress controllerで特権昇格・任意設定注入に使われうるannotationを判定
+// snippet系(任意nginx.conf注入, CVE-2021-25742類)とauth/redirect系(認証迂回・オープンリダイレクト)を遮断
+func isDangerousIngressAnnotation(key string) bool {
+	k := strings.ToLower(key)
+	if strings.HasSuffix(k, "-snippet") {
+		return true
+	}
+	for _, bad := range []string{
+		"nginx.ingress.kubernetes.io/auth-url",
+		"nginx.ingress.kubernetes.io/auth-tls-",
+		"nginx.ingress.kubernetes.io/server-alias",
+		"nginx.ingress.kubernetes.io/permanent-redirect",
+		"nginx.ingress.kubernetes.io/lua-",
+		"nginx.ingress.kubernetes.io/mirror-",
+	} {
+		if strings.HasPrefix(k, bad) {
+			return true
+		}
+	}
+	return false
 }
 
 // 公開ホストをproxy(プロキシ無効時はapp直)へルーティングするIngressを作成/更新

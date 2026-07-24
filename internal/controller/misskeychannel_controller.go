@@ -60,7 +60,8 @@ func (r *MisskeyChannelReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if r.Digests == nil {
 			return ctrl.Result{}, fmt.Errorf("trackImageDigest requested but no digest resolver configured")
 		}
-		if pinned, err := r.Digests.Pinned(ctx, ch.Spec.Image, nil); err == nil {
+		// Channelはcluster-scopedでpull secret非依存のためanonymous(keyID空)で解決
+		if pinned, err := r.Digests.Pinned(ctx, ch.Spec.Image, nil, ""); err == nil {
 			target = pinned
 		} else {
 			// 解決不能時は現行statusを維持しrollout状態を壊さない。後段で短いrequeue

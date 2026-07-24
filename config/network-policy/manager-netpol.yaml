@@ -1,0 +1,29 @@
+# controller-managerのnamespaceを保護する。任意Podからの到達を、実際に使う
+# webhook(9443)/metrics(8443)/health(8081)ポートに限定し、他ポートへの横移動を遮断する
+# webhookはapiserver、healthはkubelet発でPod網外のため、これらポートへのfromは限定しない
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: manager-allow
+  namespace: cloudnative-misskey-system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: cloudnative-misskey
+spec:
+  podSelector:
+    matchLabels:
+      control-plane: controller-manager
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 9443 # webhook (from apiserver)
+        - protocol: TCP
+          port: 8443 # metrics (authn/authz protected)
+        - protocol: TCP
+          port: 8081 # health/ready (from kubelet)
+  # apiserver/DNS/レジストリ到達のためegressは制限しない
+  egress:
+    - {}
