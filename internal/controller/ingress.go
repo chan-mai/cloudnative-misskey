@@ -67,6 +67,7 @@ func isDangerousIngressAnnotation(key string) bool {
 		"nginx.ingress.kubernetes.io/server-alias",
 		"nginx.ingress.kubernetes.io/permanent-redirect",
 		"nginx.ingress.kubernetes.io/lua-",
+		"nginx.ingress.kubernetes.io/mirror-",
 	} {
 		if strings.HasPrefix(k, bad) {
 			return true

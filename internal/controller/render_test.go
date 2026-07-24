@@ -417,6 +417,38 @@ func TestRenderDefaultYMLMeilisearch(t *testing.T) {
 	}
 }
 
+func TestRenderRedisBlockExternalTLS(t *testing.T) {
+	on := true
+	m := newMisskey()
+	m.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.ext.svc", TLS: &on}
+	out := renderDefaultYML(m, resolve(m))
+	if !strings.Contains(out, "tls: {}") {
+		t.Errorf("external redis TLS must emit tls: {}\n%s", out)
+	}
+	// TLS未指定は出力しない
+	m2 := newMisskey()
+	m2.Spec.Redis.External = &misskeyv1beta1.ExternalRedis{Host: "redis.ext.svc"}
+	if strings.Contains(renderDefaultYML(m2, resolve(m2)), "tls:") {
+		t.Error("no TLS field must not emit tls:")
+	}
+}
+
+func TestTruncateMsg(t *testing.T) {
+	// 上限以内はそのまま
+	if got := truncateMsg("short"); got != "short" {
+		t.Errorf("short passthrough: %q", got)
+	}
+	// 接尾辞込みで1024バイト以内
+	long := strings.Repeat("a", 5000)
+	got := truncateMsg(long)
+	if len(got) > 1024 {
+		t.Errorf("truncated length %d exceeds 1024", len(got))
+	}
+	if !strings.HasSuffix(got, "(truncated)") {
+		t.Errorf("missing truncation suffix: ...%q", got[len(got)-20:])
+	}
+}
+
 func TestRenderDefaultYMLSQLLike(t *testing.T) {
 	m := newMisskey()
 	m.Spec.Search.Provider = misskeyv1beta1.SearchSQLPgroonga

@@ -70,6 +70,10 @@ func renderRedisBlock(w func(string, ...any), key string, ep redisEndpoint) {
 			w("  sentinelPassword: ${%s}\n", ep.passEnv)
 		}
 	}
+	// external redisのTLSを実接続へ反映(ioredisのtlsオプション, 空オブジェクトで有効化)
+	if ep.enableTLS {
+		w("  tls: {}\n")
+	}
 }
 
 // Misskeyの.config/default.ymlを生成。シークレットは${PLACEHOLDER}トークンのまま残す
