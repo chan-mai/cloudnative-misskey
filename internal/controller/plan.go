@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package controller
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -108,6 +109,13 @@ type plan struct {
 	objColumns        map[string]string // logical key -> 解決済みカラム名
 	objExtra          map[string]string // extraカラム名 -> 平文値
 	objImage          string
+
+	// Sensitive Detector
+	sensitiveDetectorEnabled     bool
+	sensitiveDetectorManaged     bool
+	sensitiveDetectorURL         string
+	sensitiveDetectorAPIKeySel   corev1.SecretKeySelector
+	sensitiveDetectorConfigImage string
 }
 
 // specを既定値適用の上でplanに平坦化
@@ -224,6 +232,27 @@ func resolve(m *misskeyv1beta1.Misskey) plan {
 		p.objColumns = objectStorageColumns(os.ColumnNames)
 		p.objExtra = os.ExtraColumns
 		p.objImage = stringOr(os.Image, "ghcr.io/cloudnative-pg/postgresql:17")
+	}
+
+	// --- Sensitive Detector ---
+	if detector := m.Spec.SensitiveDetector; detector != nil {
+		p.sensitiveDetectorEnabled = true
+		p.sensitiveDetectorConfigImage = stringOr(detector.ConfigJobImage, "ghcr.io/cloudnative-pg/postgresql:17")
+		if ext := detector.External; ext != nil {
+			p.sensitiveDetectorURL = ext.URL
+			p.sensitiveDetectorAPIKeySel = ext.APIKeySecret
+		} else {
+			p.sensitiveDetectorManaged = true
+			p.sensitiveDetectorURL = fmt.Sprintf("http://%s:%d", nameSensitiveDetector(m), sensitiveDetectorPort)
+			if detector.APIKeySecret != nil {
+				p.sensitiveDetectorAPIKeySel = *detector.APIKeySecret
+			} else {
+				p.sensitiveDetectorAPIKeySel = corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: nameSensitiveDetector(m)},
+					Key:                  sensitiveDetectorAPIKeyID,
+				}
+			}
+		}
 	}
 
 	// --- Ingress host ---

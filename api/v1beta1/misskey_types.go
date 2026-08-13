@@ -152,6 +152,12 @@ type MisskeySpec struct {
 	// +optional
 	ObjectStorage *ObjectStorageSpec `json:"objectStorage,omitempty"`
 
+	// SensitiveDetector configures Misskey's external Sensitive Detector.
+	// When set, the operator manages every related meta-table setting and either deploys the detector or connects to an external service.
+	// Requires Misskey 2026.7.0 or later.
+	// +optional
+	SensitiveDetector *SensitiveDetectorSpec `json:"sensitiveDetector,omitempty"`
+
 	// Network groups this instance's NetworkPolicy controls (ingress isolation and
 	// opt-in egress isolation).
 	// +optional
@@ -458,6 +464,94 @@ type SetupPasswordSpec struct {
 	// When nil, the operator generates one into the Secret "<name>-setup".
 	// +optional
 	SecretRef *corev1.SecretKeySelector `json:"secretRef,omitempty"`
+}
+
+// SensitiveDetectorSpec configures the external Sensitive Detector.
+// +kubebuilder:validation:XValidation:rule="!has(self.apiKeySecret) || size(self.apiKeySecret.name) > 0",message="apiKeySecret.name must not be empty"
+// +kubebuilder:validation:XValidation:rule="!(has(self.external) && has(self.apiKeySecret))",message="apiKeySecret configures the managed detector and cannot be combined with external"
+// +kubebuilder:validation:XValidation:rule="!has(self.external) || (!has(self.image) && !has(self.replicas) && (!has(self.resources) || (!has(self.resources.limits) && !has(self.resources.requests) && !has(self.resources.claims))) && !has(self.nodeSelector) && !has(self.tolerations))",message="image, replicas, resources, nodeSelector, and tolerations configure the managed detector and cannot be combined with external"
+type SensitiveDetectorSpec struct {
+	// Mode selects which uploads are analyzed.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=all;local;remote
+	Mode string `json:"mode"`
+
+	// Sensitivity controls Misskey's prediction threshold.
+	// +kubebuilder:default=medium
+	// +kubebuilder:validation:Enum=medium;low;high;veryLow;veryHigh
+	// +optional
+	Sensitivity string `json:"sensitivity,omitempty"`
+
+	// EnableForVideos analyzes normalized video frames.
+	// +optional
+	EnableForVideos bool `json:"enableForVideos,omitempty"`
+
+	// SetSensitiveFlagAutomatically marks detected media as sensitive.
+	// +optional
+	SetSensitiveFlagAutomatically bool `json:"setSensitiveFlagAutomatically,omitempty"`
+
+	// TimeoutMilliseconds is Misskey's HTTP request timeout for the detector.
+	// +kubebuilder:default=60000
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	TimeoutMilliseconds int32 `json:"timeoutMilliseconds,omitempty"`
+
+	// MaxImagesPerRequest limits the number of normalized images in one request.
+	// +kubebuilder:default=4
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	// +optional
+	MaxImagesPerRequest int32 `json:"maxImagesPerRequest,omitempty"`
+
+	// External connects Misskey to an existing detector.
+	// When omitted, the operator deploys a detector in the Misskey namespace.
+	// +optional
+	External *ExternalSensitiveDetector `json:"external,omitempty"`
+
+	// Image is the managed detector image.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Replicas is the managed detector replica count.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Resources describes compute requests and limits for the managed detector.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// NodeSelector constrains managed detector scheduling to matching nodes.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations allow the managed detector to run on tainted nodes.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// APIKeySecret references the managed detector's Bearer token.
+	// When omitted, the operator generates one in Secret "<name>-sensitive-detector".
+	// +optional
+	APIKeySecret *corev1.SecretKeySelector `json:"apiKeySecret,omitempty"`
+
+	// ConfigJobImage is the psql-capable image used to update Misskey's meta table.
+	// +kubebuilder:default="ghcr.io/cloudnative-pg/postgresql:17"
+	// +optional
+	ConfigJobImage string `json:"configJobImage,omitempty"`
+}
+
+// ExternalSensitiveDetector references a detector outside operator control.
+// +kubebuilder:validation:XValidation:rule="size(self.apiKeySecret.name) > 0",message="apiKeySecret.name must not be empty"
+type ExternalSensitiveDetector struct {
+	// URL is the detector base URL. Misskey appends /v1/detect-images.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https?://.+`
+	// +kubebuilder:validation:MaxLength=1024
+	URL string `json:"url"`
+
+	// APIKeySecret references the detector's Bearer token.
+	// +kubebuilder:validation:Required
+	APIKeySecret corev1.SecretKeySelector `json:"apiKeySecret"`
 }
 
 // ComponentSpec is the shared Deployment shape of the app and worker.

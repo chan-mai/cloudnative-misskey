@@ -4,7 +4,7 @@ kind: MisskeyChannel
 metadata:
   name: stable
 spec:
-  image: misskey/misskey:2026.6.0
+  image: misskey/misskey:2026.7.0
   # rollout省略時はimage変更が即時全インスタンスへ反映
   rollout:
     batchPercent: 20  # interval毎に切替える割合

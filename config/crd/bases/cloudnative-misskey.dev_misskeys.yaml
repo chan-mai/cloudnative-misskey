@@ -2778,6 +2778,256 @@ spec:
                     - sqlPgroonga
                     type: string
                 type: object
+              sensitiveDetector:
+                description: |-
+                  SensitiveDetector configures Misskey's external Sensitive Detector.
+                  When set, the operator manages every related meta-table setting and either deploys the detector or connects to an external service.
+                  Requires Misskey 2026.7.0 or later.
+                properties:
+                  apiKeySecret:
+                    description: |-
+                      APIKeySecret references the managed detector's Bearer token.
+                      When omitted, the operator generates one in Secret "<name>-sensitive-detector".
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  configJobImage:
+                    default: ghcr.io/cloudnative-pg/postgresql:17
+                    description: ConfigJobImage is the psql-capable image used to
+                      update Misskey's meta table.
+                    type: string
+                  enableForVideos:
+                    description: EnableForVideos analyzes normalized video frames.
+                    type: boolean
+                  external:
+                    description: |-
+                      External connects Misskey to an existing detector.
+                      When omitted, the operator deploys a detector in the Misskey namespace.
+                    properties:
+                      apiKeySecret:
+                        description: APIKeySecret references the detector's Bearer
+                          token.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      url:
+                        description: URL is the detector base URL. Misskey appends
+                          /v1/detect-images.
+                        maxLength: 1024
+                        pattern: ^https?://.+
+                        type: string
+                    required:
+                    - apiKeySecret
+                    - url
+                    type: object
+                    x-kubernetes-validations:
+                    - message: apiKeySecret.name must not be empty
+                      rule: size(self.apiKeySecret.name) > 0
+                  image:
+                    description: Image is the managed detector image.
+                    type: string
+                  maxImagesPerRequest:
+                    default: 4
+                    description: MaxImagesPerRequest limits the number of normalized
+                      images in one request.
+                    format: int32
+                    maximum: 10
+                    minimum: 1
+                    type: integer
+                  mode:
+                    description: Mode selects which uploads are analyzed.
+                    enum:
+                    - all
+                    - local
+                    - remote
+                    type: string
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: NodeSelector constrains managed detector scheduling
+                      to matching nodes.
+                    type: object
+                  replicas:
+                    description: Replicas is the managed detector replica count.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: Resources describes compute requests and limits for
+                      the managed detector.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  sensitivity:
+                    default: medium
+                    description: Sensitivity controls Misskey's prediction threshold.
+                    enum:
+                    - medium
+                    - low
+                    - high
+                    - veryLow
+                    - veryHigh
+                    type: string
+                  setSensitiveFlagAutomatically:
+                    description: SetSensitiveFlagAutomatically marks detected media
+                      as sensitive.
+                    type: boolean
+                  timeoutMilliseconds:
+                    default: 60000
+                    description: TimeoutMilliseconds is Misskey's HTTP request timeout
+                      for the detector.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  tolerations:
+                    description: Tolerations allow the managed detector to run on
+                      tainted nodes.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                required:
+                - mode
+                type: object
+                x-kubernetes-validations:
+                - message: apiKeySecret.name must not be empty
+                  rule: '!has(self.apiKeySecret) || size(self.apiKeySecret.name) >
+                    0'
+                - message: apiKeySecret configures the managed detector and cannot
+                    be combined with external
+                  rule: '!(has(self.external) && has(self.apiKeySecret))'
+                - message: image, replicas, resources, nodeSelector, and tolerations
+                    configure the managed detector and cannot be combined with external
+                  rule: '!has(self.external) || (!has(self.image) && !has(self.replicas)
+                    && (!has(self.resources) || (!has(self.resources.limits) && !has(self.resources.requests)
+                    && !has(self.resources.claims))) && !has(self.nodeSelector) &&
+                    !has(self.tolerations))'
               setupPassword:
                 description: |-
                   SetupPassword configures the initial-setup admin password written to
