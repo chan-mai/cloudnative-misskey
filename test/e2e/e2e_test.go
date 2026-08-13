@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,7 +51,7 @@ const (
 	misskeyImage = "misskey/misskey:2026.7.0"
 )
 
-func newClient(t *testing.T) client.Client {
+func newClient(t *testing.T) (client.Client, kubernetes.Interface) {
 	t.Helper()
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -67,7 +68,11 @@ func newClient(t *testing.T) client.Client {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	return cl
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("clientset: %v", err)
+	}
+	return cl, kube
 }
 
 // dumpDiagnostics: 失敗時のCI調査用にCR conditionsとpod状態を出力
@@ -94,7 +99,7 @@ func dumpDiagnostics(t *testing.T, ctx context.Context, cl client.Client) {
 
 func TestE2E(t *testing.T) {
 	ctx := context.Background()
-	cl := newClient(t)
+	cl, kube := newClient(t)
 
 	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("ns: %v", err)
@@ -200,24 +205,45 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("get previous sensitive DB verification Job: %v", err)
 	}
 
+	runAsNonRoot := true
+	runAsUser := int64(1000)
+	fsGroup := int64(1000)
+	automountServiceAccountToken := false
+	allowPrivilegeEscalation := false
+	readOnlyRootFilesystem := true
 	verify := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: verifyKey.Name, Namespace: verifyKey.Namespace},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: new(int32),
 			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-				RestartPolicy: corev1.RestartPolicyNever,
+				AutomountServiceAccountToken: &automountServiceAccountToken,
+				RestartPolicy:                corev1.RestartPolicyNever,
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot:   &runAsNonRoot,
+					RunAsUser:      &runAsUser,
+					FSGroup:        &fsGroup,
+					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				},
 				Containers: []corev1.Container{{
 					Name:    "verify",
 					Image:   "ghcr.io/cloudnative-pg/postgresql:17",
 					Command: []string{"/bin/sh", "-ec"},
 					Args:    []string{`test "$(psql -Atc "SELECT \"sensitiveMediaDetection\" = 'all' AND \"sensitiveMediaDetectionSensitivity\" = 'medium' AND \"sensitiveMediaDetectionApiUrl\" = 'http://e2e-sensitive-detector:3009' AND \"sensitiveMediaDetectionApiKey\" IS NOT NULL AND \"sensitiveMediaDetectionTimeout\" = 60000 AND \"sensitiveMediaDetectionMaxImagesPerRequest\" = 4 FROM meta WHERE id = 'x'")" = t`},
+					SecurityContext: &corev1.SecurityContext{
+						AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+						ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+					},
 					Env: []corev1.EnvVar{
 						{Name: "PGHOST", Value: name + "-db-rw"},
 						{Name: "PGDATABASE", Value: "misskey"},
 						{Name: "PGUSER", Value: "misskey"},
 						{Name: "PGPASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: name + "-db-app"}, Key: "password"}}},
+						{Name: "HOME", Value: "/tmp"},
 					},
+					VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
 				}},
+				Volumes: []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 			}},
 		},
 	}
@@ -230,7 +256,24 @@ func TestE2E(t *testing.T) {
 			return false, nil
 		}
 		if job.Status.Failed > 0 {
-			return false, fmt.Errorf("verification Job failed")
+			var pods corev1.PodList
+			if err := cl.List(ctx, &pods, client.InNamespace(ns), client.MatchingLabels{batchv1.JobNameLabel: job.Name}); err != nil {
+				return false, fmt.Errorf("verification Job failed: list Pods: %w", err)
+			}
+			for i := range pods.Items {
+				pod := &pods.Items[i]
+				for _, owner := range pod.OwnerReferences {
+					if owner.UID != job.UID {
+						continue
+					}
+					logs, err := kube.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{Container: "verify"}).DoRaw(ctx)
+					if err != nil {
+						return false, fmt.Errorf("verification Job failed: Pod %s logs: %w", pod.Name, err)
+					}
+					return false, fmt.Errorf("verification Job failed: Pod %s logs: %s", pod.Name, strings.TrimSpace(string(logs)))
+				}
+			}
+			return false, fmt.Errorf("verification Job failed: Pod not found")
 		}
 		return job.Status.Succeeded > 0, nil
 	})

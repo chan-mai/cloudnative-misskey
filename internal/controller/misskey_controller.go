@@ -135,14 +135,18 @@ func (r *MisskeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// imageFrom時はChannelからimageを解決(in-memoryのみ, finalizer付与後なのでpersistされない)
+	sensitiveDetectorState := sensitiveDetectorConfigState{}
 	reconcileErr := r.resolveImage(ctx, &m)
 	if reconcileErr == nil {
-		reconcileErr = r.reconcileAll(ctx, &m)
+		reconcileErr = r.reconcileAll(ctx, &m, &sensitiveDetectorState)
+	}
+	if !sensitiveDetectorState.checked {
+		r.readSensitiveDetectorConfigState(ctx, &m, &sensitiveDetectorState)
 	}
 	if reconcileErr != nil {
 		r.event(&m, corev1.EventTypeWarning, "ReconcileError", "Reconcile", "%s", truncateMsg(reconcileErr.Error()))
 	}
-	ready, statusErr := r.updateStatus(ctx, &m, reconcileErr)
+	ready, statusErr := r.updateStatus(ctx, &m, reconcileErr, sensitiveDetectorState)
 	if statusErr != nil {
 		logger.Error(statusErr, "failed to update status")
 	}
@@ -332,7 +336,7 @@ func (r *MisskeyReconciler) redisReady(ctx context.Context, m *misskeyv1beta1.Mi
 }
 
 // 全子リソースを依存順に生成
-func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.Misskey) error {
+func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.Misskey, sensitiveDetectorState *sensitiveDetectorConfigState) error {
 	p := resolve(m)
 
 	// planがこれらのsecretを参照するため、pod前に用意
@@ -358,7 +362,7 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 	if err := r.reconcileTenancy(ctx, m); err != nil {
 		return err
 	}
-	if p.sensitiveDetectorManaged {
+	if p.sensitiveDetectorManaged && !m.Spec.Suspend {
 		if err := r.reconcileSensitiveDetector(ctx, m, p); err != nil {
 			return err
 		}
@@ -393,15 +397,15 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 			return err
 		}
 	}
-	sensitiveDetectorStateExists, err := r.hasSensitiveDetectorConfigState(ctx, m)
-	if err != nil {
-		return err
+	r.readSensitiveDetectorConfigState(ctx, m, sensitiveDetectorState)
+	if sensitiveDetectorState.err != nil {
+		return sensitiveDetectorState.err
 	}
-	sensitiveDetectorConfigDone := !p.sensitiveDetectorEnabled && !sensitiveDetectorStateExists
+	sensitiveDetectorConfigDone := !p.sensitiveDetectorEnabled && !sensitiveDetectorState.exists
 	if m.Spec.Suspend {
-		// 休止: app/workerを0に落としautoscaler削除。migration/objectStorage Jobの新規作成もskip
+		// 休止: app/worker/managed SensitiveDetectorを0に落としautoscaler削除。migration/objectStorage Jobの新規作成もskip
 		// 実行中のmigration Jobは走り切らせる(途中killの方が危険)
-		if err := r.suspendWorkloads(ctx, m); err != nil {
+		if err := r.suspendWorkloads(ctx, m, p); err != nil {
 			return err
 		}
 	} else if r.databaseReady(ctx, m, p) {
@@ -425,8 +429,8 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 					return err
 				}
 			}
-			if p.sensitiveDetectorEnabled || sensitiveDetectorStateExists {
-				sensitiveDetectorConfigDone, err = r.reconcileSensitiveDetectorConfig(ctx, m, p)
+			if p.sensitiveDetectorEnabled || sensitiveDetectorState.exists {
+				sensitiveDetectorConfigDone, err = r.reconcileSensitiveDetectorConfig(ctx, m, p, sensitiveDetectorState)
 				if err != nil {
 					return err
 				}
@@ -452,7 +456,7 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 	if err := r.reconcileMonitoring(ctx, m, p); err != nil {
 		return err
 	}
-	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, sensitiveDetectorConfigDone); err != nil {
+	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, sensitiveDetectorConfigDone, sensitiveDetectorState); err != nil {
 		return err
 	}
 	return nil
@@ -460,7 +464,7 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 
 // reconcile結果とappの実ヘルスをMisskeyのstatusサブリソースに反映
 // インスタンスがReadyかを返す
-func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1beta1.Misskey, reconcileErr error) (bool, error) {
+func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1beta1.Misskey, reconcileErr error, sensitiveDetectorState sensitiveDetectorConfigState) (bool, error) {
 	p := resolve(m)
 	type cnd struct {
 		typ             string
@@ -488,10 +492,9 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1beta1.
 	} else {
 		remove = append(remove, "ObjectStorageConfigured")
 	}
-	sensitiveDetectorState, sensitiveDetectorStateErr := r.hasSensitiveDetectorConfigState(ctx, m)
-	if p.sensitiveDetectorEnabled || sensitiveDetectorState || sensitiveDetectorStateErr != nil {
-		if sensitiveDetectorStateErr != nil {
-			set = append(set, cnd{"SensitiveDetectorReady", metav1.ConditionFalse, "StatusUnknown", truncateMsg(sensitiveDetectorStateErr.Error())})
+	if p.sensitiveDetectorEnabled || sensitiveDetectorState.exists || sensitiveDetectorState.err != nil {
+		if sensitiveDetectorState.err != nil {
+			set = append(set, cnd{"SensitiveDetectorReady", metav1.ConditionFalse, "StatusUnknown", truncateMsg(sensitiveDetectorState.err.Error())})
 		} else {
 			detectorStatus, detectorReason, detectorMessage := r.sensitiveDetectorCondition(ctx, m, p)
 			set = append(set, cnd{"SensitiveDetectorReady", detectorStatus, detectorReason, detectorMessage})

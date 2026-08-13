@@ -453,6 +453,34 @@ func TestSensitiveDetectorGateAndStatus(t *testing.T) {
 	if !hasCondition(cur, "SensitiveDetectorReady", metav1.ConditionTrue) {
 		t.Errorf("SensitiveDetectorReady must become True: %+v", cur.Status.Conditions)
 	}
+	cur.Spec.Suspend = true
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetector(m), Namespace: ns}, detector); err != nil {
+		t.Fatal(err)
+	}
+	if detector.Spec.Replicas == nil || *detector.Spec.Replicas != 0 {
+		t.Errorf("detector replicas=%v after suspend, want 0", detector.Spec.Replicas)
+	}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.Suspend = false
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetector(m), Namespace: ns}, detector); err != nil {
+		t.Fatal(err)
+	}
+	if detector.Spec.Replicas == nil || *detector.Spec.Replicas != 1 {
+		t.Errorf("detector replicas=%v after resume, want 1", detector.Spec.Replicas)
+	}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
 
 	externalSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "external-detector", Namespace: ns}, StringData: map[string]string{"token": "external-key"}}
 	if err := cl.Create(ctx, externalSecret); err != nil {

@@ -248,6 +248,9 @@ func TestSensitiveDetectorResources(t *testing.T) {
 	if container.Env[0].ValueFrom == nil || container.Env[0].ValueFrom.SecretKeyRef == nil {
 		t.Errorf("API key must use SecretKeyRef: %+v", container.Env)
 	}
+	if got := buildSensitiveDetectorPodSpec(&misskeyv1beta1.Misskey{}, p); !reflect.DeepEqual(got, corev1.PodSpec{}) {
+		t.Errorf("nil detector PodSpec=%+v, want empty", got)
+	}
 
 	sql := renderSensitiveDetectorConfigSQL(m)
 	for _, want := range []string{
@@ -294,7 +297,8 @@ func TestSensitiveDetectorConfigJobRecreatedWithDatabaseInputs(t *testing.T) {
 	r := &MisskeyReconciler{Client: cl, Scheme: cl.Scheme()}
 	reconcile := func() string {
 		p := resolve(m)
-		complete, err := r.reconcileSensitiveDetectorConfig(ctx, m, p)
+		state := &sensitiveDetectorConfigState{}
+		complete, err := r.reconcileSensitiveDetectorConfig(ctx, m, p, state)
 		if err != nil {
 			t.Fatalf("reconcileSensitiveDetectorConfig: %v", err)
 		}
@@ -310,18 +314,21 @@ func TestSensitiveDetectorConfigJobRecreatedWithDatabaseInputs(t *testing.T) {
 		if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, hash), Namespace: m.Namespace}, job); err != nil {
 			t.Fatalf("get Sensitive Detector configuration Job: %v", err)
 		}
-		env := map[string]string{}
+		env := map[string]corev1.EnvVar{}
 		for _, variable := range job.Spec.Template.Spec.Containers[0].Env {
-			env[variable.Name] = variable.Value
+			env[variable.Name] = variable
 		}
 		for name, want := range map[string]string{
 			"PGHOST": p.dbHost, "PGPORT": strconv.Itoa(int(p.dbPort)), "PGDATABASE": p.dbName, "PGUSER": p.dbUser,
 		} {
-			if env[name] != want {
-				t.Errorf("%s=%q, want %q", name, env[name], want)
+			if env[name].Value != want {
+				t.Errorf("%s=%q, want %q", name, env[name].Value, want)
 			}
 		}
-		passwordEnv := job.Spec.Template.Spec.Containers[0].Env[4]
+		passwordEnv, ok := env["PGPASSWORD"]
+		if !ok {
+			t.Fatal("PGPASSWORD environment variable not found")
+		}
 		if passwordEnv.ValueFrom == nil || passwordEnv.ValueFrom.SecretKeyRef == nil {
 			t.Fatalf("PGPASSWORD does not reference a Secret: %+v", passwordEnv)
 		}
@@ -390,7 +397,8 @@ func TestSensitiveDetectorConfigJobRecreatedWithImagePullSecrets(t *testing.T) {
 	}).Build()
 	r := &MisskeyReconciler{Client: cl, Scheme: cl.Scheme()}
 	reconcile := func() string {
-		complete, err := r.reconcileSensitiveDetectorConfig(ctx, m, resolve(m))
+		state := &sensitiveDetectorConfigState{}
+		complete, err := r.reconcileSensitiveDetectorConfig(ctx, m, resolve(m), state)
 		if err != nil {
 			t.Fatalf("reconcileSensitiveDetectorConfig: %v", err)
 		}

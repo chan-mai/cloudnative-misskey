@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package controller
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -242,7 +243,7 @@ func resolve(m *misskeyv1beta1.Misskey) plan {
 			p.sensitiveDetectorAPIKeySel = ext.APIKeySecret
 		} else {
 			p.sensitiveDetectorManaged = true
-			p.sensitiveDetectorURL = "http://" + nameSensitiveDetector(m) + ":3009"
+			p.sensitiveDetectorURL = fmt.Sprintf("http://%s:%d", nameSensitiveDetector(m), sensitiveDetectorPort)
 			if detector.APIKeySecret != nil {
 				p.sensitiveDetectorAPIKeySel = *detector.APIKeySecret
 			} else {

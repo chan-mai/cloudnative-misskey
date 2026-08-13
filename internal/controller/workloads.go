@@ -155,10 +155,14 @@ func resumeReplicas(comp misskeyv1beta1.ComponentSpec, a *scaleConfig, dep *apps
 	return replicasOr(a.MinReplicas, 1)
 }
 
-// suspendWorkloads: app/workerをreplicas 0に落としautoscalerを削除
+// suspendWorkloads: app/worker/managed SensitiveDetectorをreplicas 0に落としautoscalerを削除
 // Deployment不在時は何も作らない(初回install前のsuspendはworkload未生成のまま)
-func (r *MisskeyReconciler) suspendWorkloads(ctx context.Context, m *misskeyv1beta1.Misskey) error {
-	for _, name := range []string{nameApp(m), nameWorker(m)} {
+func (r *MisskeyReconciler) suspendWorkloads(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) error {
+	names := []string{nameApp(m), nameWorker(m)}
+	if p.sensitiveDetectorManaged {
+		names = append(names, nameSensitiveDetector(m))
+	}
+	for _, name := range names {
 		if err := r.deleteHPA(ctx, m, name); err != nil {
 			return err
 		}

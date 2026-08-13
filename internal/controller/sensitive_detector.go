@@ -65,17 +65,20 @@ func (r *MisskeyReconciler) reconcileSensitiveDetectorSecret(ctx context.Context
 }
 
 func renderSensitiveDetectorConfig() string {
-	return `export default {
-  port: 3009,
+	return fmt.Sprintf(`export default {
+  port: %d,
   host: '0.0.0.0',
   modelDir: '/models',
   apiKey: process.env.SENSITIVE_DETECTOR_API_KEY,
 };
-`
+`, sensitiveDetectorPort)
 }
 
 func buildSensitiveDetectorPodSpec(m *misskeyv1beta1.Misskey, p plan) corev1.PodSpec {
 	detector := m.Spec.SensitiveDetector
+	if detector == nil {
+		return corev1.PodSpec{}
+	}
 	return corev1.PodSpec{
 		AutomountServiceAccountToken: boolPtr(false),
 		ImagePullSecrets:             m.Spec.ImagePullSecrets,
@@ -349,15 +352,13 @@ func (r *MisskeyReconciler) cleanupSensitiveDetectorConfigJobs(ctx context.Conte
 	return nil
 }
 
-func (r *MisskeyReconciler) reconcileSensitiveDetectorConfig(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) (bool, error) {
-	cm := &corev1.ConfigMap{}
-	stateKey := types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: m.Namespace}
-	if m.Spec.SensitiveDetector == nil {
-		if err := r.Get(ctx, stateKey, cm); apierrors.IsNotFound(err) {
-			return true, nil
-		} else if err != nil {
-			return false, err
-		}
+func (r *MisskeyReconciler) reconcileSensitiveDetectorConfig(ctx context.Context, m *misskeyv1beta1.Misskey, p plan, state *sensitiveDetectorConfigState) (bool, error) {
+	r.readSensitiveDetectorConfigState(ctx, m, state)
+	if state.err != nil {
+		return false, state.err
+	}
+	if m.Spec.SensitiveDetector == nil && !state.exists {
+		return true, nil
 	}
 
 	sql := renderSensitiveDetectorConfigSQL(m)
@@ -370,7 +371,7 @@ func (r *MisskeyReconciler) reconcileSensitiveDetectorConfig(ctx context.Context
 		return false, err
 	}
 
-	cm = &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: nameSensitiveDetectorConfig(m), Namespace: m.Namespace}}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: nameSensitiveDetectorConfig(m), Namespace: m.Namespace}}
 	if err := r.apply(ctx, m, cm, func() error {
 		cm.Labels = labelsFor(m, "sensitive-detector-config")
 		cm.Data = map[string]string{
@@ -382,6 +383,7 @@ func (r *MisskeyReconciler) reconcileSensitiveDetectorConfig(ctx context.Context
 	}); err != nil {
 		return false, err
 	}
+	state.exists = true
 
 	job := &batchv1.Job{}
 	err = r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: m.Namespace}, job)
@@ -424,6 +426,20 @@ func (r *MisskeyReconciler) hasSensitiveDetectorConfigState(ctx context.Context,
 	return false, err
 }
 
+type sensitiveDetectorConfigState struct {
+	checked bool
+	exists  bool
+	err     error
+}
+
+func (r *MisskeyReconciler) readSensitiveDetectorConfigState(ctx context.Context, m *misskeyv1beta1.Misskey, state *sensitiveDetectorConfigState) {
+	if state.checked {
+		return
+	}
+	state.exists, state.err = r.hasSensitiveDetectorConfigState(ctx, m)
+	state.checked = true
+}
+
 func (r *MisskeyReconciler) misskeyWorkloadsConverged(ctx context.Context, m *misskeyv1beta1.Misskey, p plan) bool {
 	checksum, err := r.misskeyChecksum(ctx, m, p)
 	if err != nil {
@@ -450,7 +466,7 @@ func (r *MisskeyReconciler) misskeyWorkloadsConverged(ctx context.Context, m *mi
 }
 
 // 新設定の反映完了まで旧リソースを保持
-func (r *MisskeyReconciler) finalizeSensitiveDetectorCleanup(ctx context.Context, m *misskeyv1beta1.Misskey, p plan, configComplete bool) error {
+func (r *MisskeyReconciler) finalizeSensitiveDetectorCleanup(ctx context.Context, m *misskeyv1beta1.Misskey, p plan, configComplete bool, state *sensitiveDetectorConfigState) error {
 	if !configComplete || !r.misskeyWorkloadsConverged(ctx, m, p) {
 		return nil
 	}
@@ -472,7 +488,12 @@ func (r *MisskeyReconciler) finalizeSensitiveDetectorCleanup(ctx context.Context
 		return err
 	}
 	if !p.sensitiveDetectorEnabled {
-		return r.cleanupSensitiveDetectorConfigState(ctx, m)
+		if err := r.cleanupSensitiveDetectorConfigState(ctx, m); err != nil {
+			return err
+		}
+		if state != nil {
+			state.exists = false
+		}
 	}
 	return nil
 }

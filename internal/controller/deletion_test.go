@@ -93,7 +93,7 @@ func TestReconcileDeleteRetainOrphans(t *testing.T) {
 	}
 }
 
-func TestSensitiveDetectorGeneratedCustomGeneratedSecret(t *testing.T) {
+func TestSensitiveDetectorSecretGeneratedCustomTransition(t *testing.T) {
 	ctx := context.Background()
 	m := newMisskey()
 	m.UID = "uid-sensitive"
@@ -122,7 +122,7 @@ func TestSensitiveDetectorGeneratedCustomGeneratedSecret(t *testing.T) {
 		t.Fatalf("create custom detector Secret: %v", err)
 	}
 	p := resolve(m)
-	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, true); err != nil {
+	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, true, nil); err != nil {
 		t.Fatalf("check pending custom detector Secret transition: %v", err)
 	}
 	if err := cl.Get(ctx, key, &corev1.Secret{}); err != nil {
@@ -142,7 +142,7 @@ func TestSensitiveDetectorGeneratedCustomGeneratedSecret(t *testing.T) {
 	if err := cl.Create(ctx, convergedDeployment(nameSensitiveDetector(m), m.Namespace)); err != nil {
 		t.Fatalf("create detector Deployment: %v", err)
 	}
-	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, true); err != nil {
+	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, true, nil); err != nil {
 		t.Fatalf("finalize custom detector Secret transition: %v", err)
 	}
 	if err := cl.Get(ctx, key, &corev1.Secret{}); !apierrors.IsNotFound(err) {
