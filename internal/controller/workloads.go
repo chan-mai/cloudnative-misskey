@@ -198,5 +198,13 @@ func (r *MisskeyReconciler) misskeyChecksum(ctx context.Context, m *misskeyv1bet
 			parts = append(parts, r.objectStorageHash(ctx, m, p, sql, assigns))
 		}
 	}
+	if p.sensitiveDetectorEnabled {
+		sql := renderSensitiveDetectorConfigSQL(m)
+		hash, err := r.sensitiveDetectorConfigHash(ctx, m, p, sql)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, hash)
+	}
 	return checksumAnnotation(parts...), nil
 }

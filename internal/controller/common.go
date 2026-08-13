@@ -128,15 +128,17 @@ func markRotation(m *misskeyv1beta1.Misskey, secret *corev1.Secret) {
 
 // インスタンス全体で使う既知のポート番号
 const (
-	misskeyPort      = 3000
-	proxyPort        = 8080
-	proxyMetricsPort = 9180
-	redisPort        = 6379
-	sentinelPort     = 26379
-	meiliPort        = 7700
-	postgresPort     = 5432
-	meiliMasterKeyID = "MEILI_MASTER_KEY"
-	setupPasswordID  = "SETUP_PASSWORD"
+	misskeyPort               = 3000
+	proxyPort                 = 8080
+	proxyMetricsPort          = 9180
+	redisPort                 = 6379
+	sentinelPort              = 26379
+	meiliPort                 = 7700
+	sensitiveDetectorPort     = 3009
+	postgresPort              = 5432
+	meiliMasterKeyID          = "MEILI_MASTER_KEY"
+	setupPasswordID           = "SETUP_PASSWORD"
+	sensitiveDetectorAPIKeyID = "SENSITIVE_DETECTOR_API_KEY"
 	// HA時にRedisSentinelが監視するmaster group名。各roleは独立したsentinel群のため共通で可
 	redisMasterGroup = "mymaster"
 
@@ -227,6 +229,9 @@ func nameDB(m *misskeyv1beta1.Misskey) string              { return m.Name + "-d
 func nameConfig(m *misskeyv1beta1.Misskey) string          { return m.Name + "-config" }
 func nameMaintenanceHTML(m *misskeyv1beta1.Misskey) string { return m.Name + "-maintenance-html" }
 func nameSetup(m *misskeyv1beta1.Misskey) string           { return m.Name + "-setup" }
+func nameSensitiveDetector(m *misskeyv1beta1.Misskey) string {
+	return m.Name + "-sensitive-detector"
+}
 
 // version-scopedなmigration Job名。image変更で別Job
 func nameMigrate(m *misskeyv1beta1.Misskey) string {
@@ -273,6 +278,15 @@ func nameObjectStorage(m *misskeyv1beta1.Misskey, hash string) string {
 
 // objectStorage投入SQLのConfigMap(stable名)
 func nameObjectStorageSQL(m *misskeyv1beta1.Misskey) string { return m.Name + "-objstorage-sql" }
+
+func nameSensitiveDetectorConfigJob(m *misskeyv1beta1.Misskey, hash string) string {
+	return m.Name + "-sensitive-detector-config-" + hash[:10]
+}
+
+// Sensitive Detector投入SQLと管理状態のConfigMap
+func nameSensitiveDetectorConfig(m *misskeyv1beta1.Misskey) string {
+	return m.Name + "-sensitive-detector-config"
+}
 
 // vへのポインタを返す
 func int32Ptr(v int32) *int32 { return &v }

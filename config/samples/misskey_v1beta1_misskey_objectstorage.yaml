@@ -19,7 +19,7 @@ metadata:
   name: example-r2
 spec:
   url: https://misskey.example.com/
-  image: misskey/misskey:2026.6.0
+  image: misskey/misskey:2026.7.0
   setupPassword: {}
   app: { replicas: 3 }
   worker: { replicas: 2 }

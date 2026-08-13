@@ -69,6 +69,7 @@ func (r *MisskeyReconciler) retainData(ctx context.Context, m *misskeyv1beta1.Mi
 		{secretGVK, nameMeili(m)},      // meili master key(消えると既存indexへアクセス不可)
 		{secretGVK, nameSetup(m)},      // setup password
 		{secretGVK, nameRedisAuthSecret(m)},
+		{secretGVK, nameSensitiveDetector(m)},
 	}
 	// redisは全suffixのstandalone STS / HA CR
 	for _, suffix := range allRedisSuffixes() {

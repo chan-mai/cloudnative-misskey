@@ -96,7 +96,7 @@ kubectl get misskey
 # example   https://misskey.example.com/   meilisearch   Running   True    30s
 ```
 
-`phase`は`Progressing`(subsystem未達)/`Running`(全達)/`Error`(reconcile失敗)の3値です。詳細な条件は`conditions`(`DatabaseReady`/`RedisReady`/`SearchReady`/`MigrationComplete`/`AppReady`/`WorkerReady`/`ProxyReady`/`IngressReady`と集約`Ready`)で確認します。解決済みの接続先は`kubectl get misskey -o wide`(`Database`/`Index`列)か`status`(`databaseHost`/`redisHost`/`searchIndex`)に出ます:
+`phase`は`Progressing`(subsystem未達)/`Running`(全達)/`Error`(reconcile失敗)/`Suspended`(休止)の4値です。詳細な条件は`conditions`(`DatabaseReady`/`RedisReady`/`SearchReady`/`MigrationComplete`/`ObjectStorageConfigured`/`SensitiveDetectorReady`/`AppReady`/`WorkerReady`/`ProxyReady`/`IngressReady`と集約`Ready`)で確認します。解決済みの接続先は`kubectl get misskey -o wide`(`Database`/`Index`列)か`status`(`databaseHost`/`redisHost`/`searchIndex`)に出ます:
 
 ```bash
 kubectl get misskey example -o jsonpath='{.status.databaseHost}{"\n"}'
@@ -119,7 +119,7 @@ metadata:
   name: example
 spec:
   url: https://misskey.example.com/
-  image: misskey/misskey:2026.6.0
+  image: misskey/misskey:2026.7.0
   app: { replicas: 3 }
   worker: { replicas: 2 }
   setupPassword: {}
@@ -173,6 +173,7 @@ spec:
 | `monitoring.enabled` | `false` | PostgreSQL/Redis/MeiliSearch/proxy(Caddy)のServiceMonitor/PodMonitorを生成(opt-in, Prometheus Operator必須)。Redisはexporter、Meiliは`/metrics`を自動有効化。proxyはCaddyのHTTPメトリクス(RPS/レイテンシ/ステータス)を`:9180/metrics`で公開。`monitoring.labels`でPrometheus selector合わせ |
 | `monitoring.rules` | 有効時on | 基本アラートのPrometheusRule(`<name>-alerts`)を生成。proxy 5xx比率>5%と、backup設定時は最新バックアップの鮮度(`backupMaxAge`既定48h)。`rules.enabled: false`でopt-out |
 | `objectStorage` | (なし) | S3/R2互換media storage(opt-in)。DBのmetaテーブルへ書込むため詳細は[オブジェクトストレージ](#オブジェクトストレージmedia) |
+| `sensitiveDetector` | (なし) | Misskey 2026.7.0以降の外部センシティブ検出。Detectorの配備または外部参照とDB設定を管理。詳細は[Sensitive Detector](#sensitive-detector) |
 | `performance` | (Misskey既定) | job queueチューニング。`deliverJobConcurrency`/`inboxJobConcurrency`/`deliverJobPerSec`/`inboxJobPerSec`/`relationshipJobPerSec`/`deliverJobMaxAttempts`/`inboxJobMaxAttempts`。未設定キーは`default.yml`に出さずMisskey既定に委ねる |
 | `outboundProxy` | (なし) | 外向きforward proxy。`http`(→`proxy`)/`smtp`(→`proxySmtp`)/`bypassHosts`(→`proxyBypassHosts`)。`spec.proxy`(前段Caddy)とは別 |
 | `files.maxFileSize` | (Misskey既定) | アップロード上限(bytes) |
@@ -332,7 +333,7 @@ kind: MisskeyChannel
 metadata:
   name: stable
 spec:
-  image: misskey/misskey:2026.6.0
+  image: misskey/misskey:2026.7.0
   rollout:
     batchPercent: 20  # interval毎に20%ずつ切替
     interval: 1h
@@ -350,6 +351,49 @@ channelの`image`を更新すると、各インスタンスはnamespace/名前�
 - ロールアウト中にさらにimageを変えた場合、未切替インスタンスは新しいimageへ直接ジャンプします(2世代は追跡しない)
 - 参照先channelが存在しないとそのインスタンスはPhase=Errorになります
 - 切替の反映粒度はreconcile周期(既定でready時3分)です
+
+## Sensitive Detector
+
+Misskey 2026.7.0以降ではセンシティブ判定の推論処理に外部HTTPサービスが必要です。`spec.sensitiveDetector`を設定すると、Operatorが公式Sensitive DetectorとMisskeyの`meta`設定を管理します。
+
+managed構成:
+
+```yaml
+spec:
+  image: misskey/misskey:2026.7.0
+  sensitiveDetector:
+    mode: all                 # all/local/remoteから必須選択
+    sensitivity: medium       # veryLow/low/medium/high/veryHigh
+    enableForVideos: false
+    setSensitiveFlagAutomatically: false
+    timeoutMilliseconds: 60000
+    maxImagesPerRequest: 4
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { memory: 2Gi }
+```
+
+Operatorは`<name>-sensitive-detector`のDeployment/Service/PDB/ConfigMap/Secretを生成します。`apiKeySecret`を指定すると既存Secretを参照し、省略すると64文字のAPIキーを生成します。生成キーは`cloudnative-misskey.dev/rotate`annotationで更新できます。
+
+外部Detector参照:
+
+```yaml
+spec:
+  sensitiveDetector:
+    mode: local
+    external:
+      url: https://detector.example.com/
+      apiKeySecret: { name: detector-api-key, key: token }
+```
+
+- `mode`は必須です。設定ブロックがないCRでは既存の管理画面設定を変更しません
+- 設定中はmigration完了後にmeta設定Jobを実行し、完了後にapp/workerを更新します
+- managed Detectorが未準備の場合もapp/workerは稼働を継続しますが、`SensitiveDetectorReady=False`と`phase=Progressing`になります
+- 外部DetectorはOperatorから疎通確認せず、meta設定Jobの完了を`SensitiveDetectorReady=True`として扱います
+- 外部Detectorの`url`は1024文字以内です。`image`/`replicas`/`resources`/`nodeSelector`/`tolerations`はmanaged構成でのみ指定できます
+- managed構成で生成APIキーから`apiKeySecret`へ切り替えると、設定とworkloadの更新完了後に生成Secretを削除します
+- 設定ブロックを削除すると検出を`none`へ変更し、URL/APIキーを解除してapp/workerを更新した後にmanagedリソースを削除します
+- `configJobImage`はpsql 16以降を含むイメージを指定します。既定は`ghcr.io/cloudnative-pg/postgresql:17`です
 
 ## オブジェクトストレージ(media)
 
@@ -458,7 +502,7 @@ make test-e2e    # kind e2e
 
 - 外部operatorのCRD(CNPGの`Cluster`/`Pooler`、redis-operatorの`RedisReplication`/`RedisSentinel`、KEDAの`ScaledObject`)はServer-Side Applyで管理しますが、watchはしていません。これらを外部から直接削除・改変した場合の是正は、reconcile成功後に定期requeue(既定3分、`--drift-resync-interval`で調整)でSSAを再適用して行います。よってドリフトは最大その間隔で自動是正されます(Deployment/NetworkPolicy/PDB等のnative resourceはOwns()でwatch・即時是正)。
 - migration Jobが失敗し切った場合(BackoffLimit超過)、DB接続先やmigrationフラグ等のspec変更時は自動で作り直されます。同一設定のまま再試行するには`kubectl delete job <name>-migrate-<hash>`で削除すると、次のreconcileで再生成されます(同一入力の失敗を無限リトライしないのは、`createIndexConcurrently`失敗時のinvalid index堆積等を避けるためです)。
-- `Ready`/`Phase`はDB/Redis/MeiliSearch/migration/app/worker/proxy/Ingressの全conditionsの集約です。managed Redis/MeiliSearchはSTS(HAはpod)のready数、externalは常にTrueとして扱います。
+- `Ready`/`Phase`はDB/Redis/MeiliSearch/migration/object storage/sensitive detector/app/worker/proxy/Ingressの全conditionsの集約です。managed Redis/MeiliSearch/Sensitive Detectorはworkloadのready数、externalは設定完了をTrueとして扱います。
 - appのオートスケールはCPU/memory(native HPA)に加え、`autoscaling.rps`でRPSベース(KEDA prometheus trigger)を選べます。rps指定時はKEDA経路になりmemory targetは効きません。
 - immutable検証(`url`/`idGenerationMethod`/`tenant`/`postgres.recovery`)とcross-field整合(managed/external排他、pooler/backup/recoveryのmanaged必須、recoveryとbackupのWALアーカイブ衝突防止、autoscaling min<=max、redis role排他)はCRDのCEL(`x-kubernetes-validations`)で**常時**強制します。APIサーバが直接弾くため、webhook未導入でも効きます。
 - webhook(`config/default-webhook`、cert-manager必須、opt-in)はCELで表せない補助のみを担います: `tenant`未設定→namespace確定のdefaulting(「未設定→初回設定」の穴塞ぎ)と、エラーにしない警告(external DBで`readOffload`無効、等)。cert-manager無しなら`config/default`(webhook無し)を使います。manager側は`ENABLE_WEBHOOKS=false`が設定済みで、`config/default-webhook`のpatchが`true`へ上書きします。webhook無しの場合`tenant`は生成時に明示してください(defaultingが効かないため)。

@@ -168,6 +168,12 @@ func specImages(m *misskeyv1beta1.Misskey) map[string]string {
 	if os := m.Spec.ObjectStorage; os != nil {
 		add("spec.objectStorage.image", os.Image)
 	}
+	if detector := m.Spec.SensitiveDetector; detector != nil {
+		if detector.External == nil {
+			add("spec.sensitiveDetector.image", detector.Image)
+		}
+		add("spec.sensitiveDetector.configJobImage", detector.ConfigJobImage)
+	}
 	add("spec.monitoring.redisExporterImage", m.Spec.Monitoring.RedisExporterImage)
 	return out
 }

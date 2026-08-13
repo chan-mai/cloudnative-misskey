@@ -20,15 +20,20 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	misskeyv1beta1 "github.com/chan-mai/cloudnative-misskey/api/v1beta1"
 )
@@ -177,6 +182,256 @@ func TestResolveExternal(t *testing.T) {
 	}
 	if p.meiliKeySel.Name != "meilisec" {
 		t.Errorf("external meili key selector wrong: %+v", p.meiliKeySel)
+	}
+}
+
+func sensitiveDetectorSpec() *misskeyv1beta1.SensitiveDetectorSpec {
+	return &misskeyv1beta1.SensitiveDetectorSpec{
+		Mode:                "all",
+		Sensitivity:         "high",
+		EnableForVideos:     true,
+		TimeoutMilliseconds: 45000,
+		MaxImagesPerRequest: 6,
+	}
+}
+
+func TestResolveSensitiveDetector(t *testing.T) {
+	m := newMisskey()
+	m.Spec.SensitiveDetector = sensitiveDetectorSpec()
+	p := resolve(m)
+	if !p.sensitiveDetectorEnabled || !p.sensitiveDetectorManaged {
+		t.Fatalf("managed Sensitive Detector not resolved: %+v", p)
+	}
+	if p.sensitiveDetectorURL != "http://example-sensitive-detector:3009" {
+		t.Errorf("managed URL=%q", p.sensitiveDetectorURL)
+	}
+	if p.sensitiveDetectorAPIKeySel.Name != "example-sensitive-detector" || p.sensitiveDetectorAPIKeySel.Key != sensitiveDetectorAPIKeyID {
+		t.Errorf("managed API key selector=%+v", p.sensitiveDetectorAPIKeySel)
+	}
+	if p.sensitiveDetectorConfigImage != "ghcr.io/cloudnative-pg/postgresql:17" {
+		t.Errorf("config image=%q", p.sensitiveDetectorConfigImage)
+	}
+
+	m.Spec.SensitiveDetector.External = &misskeyv1beta1.ExternalSensitiveDetector{
+		URL: "https://detector.example.com/base",
+		APIKeySecret: corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "detector-key"}, Key: "token",
+		},
+	}
+	p = resolve(m)
+	if p.sensitiveDetectorManaged || p.sensitiveDetectorURL != "https://detector.example.com/base" {
+		t.Errorf("external Sensitive Detector not resolved: %+v", p)
+	}
+	if p.sensitiveDetectorAPIKeySel.Name != "detector-key" || p.sensitiveDetectorAPIKeySel.Key != "token" {
+		t.Errorf("external API key selector=%+v", p.sensitiveDetectorAPIKeySel)
+	}
+}
+
+func TestSensitiveDetectorResources(t *testing.T) {
+	m := newMisskey()
+	m.Spec.SensitiveDetector = sensitiveDetectorSpec()
+	p := resolve(m)
+	pod := buildSensitiveDetectorPodSpec(m, p)
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Error("service account token must be disabled")
+	}
+	container := pod.Containers[0]
+	if container.Image != "ghcr.io/misskey-dev/sensitive-detector:0.0.2" {
+		t.Errorf("detector image=%q", container.Image)
+	}
+	if container.ReadinessProbe == nil || container.ReadinessProbe.HTTPGet == nil || container.ReadinessProbe.HTTPGet.Path != "/health" {
+		t.Errorf("readiness probe=%+v", container.ReadinessProbe)
+	}
+	if container.SecurityContext == nil || container.SecurityContext.ReadOnlyRootFilesystem == nil || !*container.SecurityContext.ReadOnlyRootFilesystem {
+		t.Errorf("security context=%+v", container.SecurityContext)
+	}
+	if container.Env[0].ValueFrom == nil || container.Env[0].ValueFrom.SecretKeyRef == nil {
+		t.Errorf("API key must use SecretKeyRef: %+v", container.Env)
+	}
+
+	sql := renderSensitiveDetectorConfigSQL(m)
+	for _, want := range []string{
+		`"sensitiveMediaDetection" = :'sensitive_detector_mode'`,
+		`"sensitiveMediaDetectionApiUrl" = :'sensitive_detector_url'`,
+		`"sensitiveMediaDetectionApiKey" = :'sensitive_detector_key'`,
+		`"sensitiveMediaDetectionTimeout" = 45000`,
+		`"sensitiveMediaDetectionMaxImagesPerRequest" = 6`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("SQL missing %q:\n%s", want, sql)
+		}
+	}
+
+	m.Spec.SensitiveDetector = nil
+	reset := renderSensitiveDetectorConfigSQL(m)
+	for _, want := range []string{
+		`"sensitiveMediaDetection" = 'none'`,
+		`"sensitiveMediaDetectionApiUrl" = NULL`,
+		`"sensitiveMediaDetectionApiKey" = NULL`,
+	} {
+		if !strings.Contains(reset, want) {
+			t.Errorf("reset SQL missing %q:\n%s", want, reset)
+		}
+	}
+}
+
+func TestSensitiveDetectorConfigJobRecreatedWithDatabaseInputs(t *testing.T) {
+	m := newMisskey()
+	m.UID = "sensitive-db-change"
+	m.Spec.SensitiveDetector = sensitiveDetectorSpec()
+	m.Spec.Postgres.External = &misskeyv1beta1.ExternalPostgres{
+		Host: "pg-a", Port: 5432, Database: "misskey-a", User: "user-a",
+		PasswordSecret: corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "pg-password"}, Key: "password",
+		},
+	}
+	ctx := context.Background()
+	passwordSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-password", Namespace: m.Namespace},
+		Data:       map[string][]byte{"password": []byte("initial")},
+	}
+	cl := fake.NewClientBuilder().WithScheme(deletionScheme()).WithObjects(passwordSecret).Build()
+	r := &MisskeyReconciler{Client: cl, Scheme: cl.Scheme()}
+	reconcile := func() string {
+		p := resolve(m)
+		complete, err := r.reconcileSensitiveDetectorConfig(ctx, m, p)
+		if err != nil {
+			t.Fatalf("reconcileSensitiveDetectorConfig: %v", err)
+		}
+		if complete {
+			t.Fatal("new Sensitive Detector configuration Job reported complete")
+		}
+		cm := &corev1.ConfigMap{}
+		if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: m.Namespace}, cm); err != nil {
+			t.Fatalf("get Sensitive Detector configuration state: %v", err)
+		}
+		hash := cm.Data["desired-hash"]
+		job := &batchv1.Job{}
+		if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, hash), Namespace: m.Namespace}, job); err != nil {
+			t.Fatalf("get Sensitive Detector configuration Job: %v", err)
+		}
+		env := map[string]string{}
+		for _, variable := range job.Spec.Template.Spec.Containers[0].Env {
+			env[variable.Name] = variable.Value
+		}
+		for name, want := range map[string]string{
+			"PGHOST": p.dbHost, "PGPORT": strconv.Itoa(int(p.dbPort)), "PGDATABASE": p.dbName, "PGUSER": p.dbUser,
+		} {
+			if env[name] != want {
+				t.Errorf("%s=%q, want %q", name, env[name], want)
+			}
+		}
+		passwordEnv := job.Spec.Template.Spec.Containers[0].Env[4]
+		if passwordEnv.ValueFrom == nil || passwordEnv.ValueFrom.SecretKeyRef == nil {
+			t.Fatalf("PGPASSWORD does not reference a Secret: %+v", passwordEnv)
+		}
+		if ref := passwordEnv.ValueFrom.SecretKeyRef; ref.Name != p.dbPassSel.Name || ref.Key != p.dbPassSel.Key {
+			t.Errorf("PGPASSWORD SecretKeyRef=%s/%s, want %s/%s", ref.Name, ref.Key, p.dbPassSel.Name, p.dbPassSel.Key)
+		}
+		return hash
+	}
+
+	previous := reconcile()
+	changes := []struct {
+		name   string
+		change func()
+	}{
+		{"host", func() { m.Spec.Postgres.External.Host = "pg-b" }},
+		{"port", func() { m.Spec.Postgres.External.Port = 6543 }},
+		{"database", func() { m.Spec.Postgres.External.Database = "misskey-b" }},
+		{"user", func() { m.Spec.Postgres.External.User = "user-b" }},
+		{"password Secret name", func() {
+			if err := cl.Create(ctx, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "pg-password-next", Namespace: m.Namespace},
+				Data:       map[string][]byte{"password": []byte("next"), "password-next": []byte("next")},
+			}); err != nil {
+				t.Fatalf("create replacement password Secret: %v", err)
+			}
+			m.Spec.Postgres.External.PasswordSecret.Name = "pg-password-next"
+		}},
+		{"password Secret key", func() { m.Spec.Postgres.External.PasswordSecret.Key = "password-next" }},
+		{"password Secret resourceVersion", func() {
+			secret := &corev1.Secret{}
+			key := types.NamespacedName{Name: m.Spec.Postgres.External.PasswordSecret.Name, Namespace: m.Namespace}
+			if err := cl.Get(ctx, key, secret); err != nil {
+				t.Fatalf("get replacement password Secret: %v", err)
+			}
+			secret.Data["password-next"] = []byte("updated")
+			if err := cl.Update(ctx, secret); err != nil {
+				t.Fatalf("update replacement password Secret: %v", err)
+			}
+		}},
+	}
+	for _, tc := range changes {
+		tc.change()
+		current := reconcile()
+		if current == previous {
+			t.Errorf("configuration Job unchanged after %s change", tc.name)
+		}
+		previous = current
+	}
+}
+
+func TestSensitiveDetectorConfigJobRecreatedWithImagePullSecrets(t *testing.T) {
+	m := newMisskey()
+	m.UID = "sensitive-pull-secrets"
+	m.Spec.SensitiveDetector = sensitiveDetectorSpec()
+	m.Spec.Postgres.External = &misskeyv1beta1.ExternalPostgres{
+		Host: "pg", Database: "misskey", User: "misskey",
+		PasswordSecret: corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "pg-password"}, Key: "password",
+		},
+	}
+	m.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "registry-a"}, {Name: "registry-b"}}
+	ctx := context.Background()
+	cl := fake.NewClientBuilder().WithScheme(deletionScheme()).WithObjects(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-password", Namespace: m.Namespace},
+		Data:       map[string][]byte{"password": []byte("password")},
+	}).Build()
+	r := &MisskeyReconciler{Client: cl, Scheme: cl.Scheme()}
+	reconcile := func() string {
+		complete, err := r.reconcileSensitiveDetectorConfig(ctx, m, resolve(m))
+		if err != nil {
+			t.Fatalf("reconcileSensitiveDetectorConfig: %v", err)
+		}
+		if complete {
+			t.Fatal("new Sensitive Detector configuration Job reported complete")
+		}
+		cm := &corev1.ConfigMap{}
+		if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: m.Namespace}, cm); err != nil {
+			t.Fatalf("get Sensitive Detector configuration state: %v", err)
+		}
+		hash := cm.Data["desired-hash"]
+		job := &batchv1.Job{}
+		if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, hash), Namespace: m.Namespace}, job); err != nil {
+			t.Fatalf("get Sensitive Detector configuration Job: %v", err)
+		}
+		if got := job.Spec.Template.Spec.ImagePullSecrets; !reflect.DeepEqual(got, m.Spec.ImagePullSecrets) {
+			t.Errorf("imagePullSecrets=%v, want %v", got, m.Spec.ImagePullSecrets)
+		}
+		return hash
+	}
+
+	previous := reconcile()
+	changes := []struct {
+		name   string
+		change func()
+	}{
+		{"addition", func() {
+			m.Spec.ImagePullSecrets = append(m.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: "registry-c"})
+		}},
+		{"modification", func() { m.Spec.ImagePullSecrets[0].Name = "registry-d" }},
+		{"reordering", func() {
+			m.Spec.ImagePullSecrets[0], m.Spec.ImagePullSecrets[2] = m.Spec.ImagePullSecrets[2], m.Spec.ImagePullSecrets[0]
+		}},
+	}
+	for _, tc := range changes {
+		tc.change()
+		current := reconcile()
+		if current == previous {
+			t.Errorf("configuration Job unchanged after imagePullSecrets %s", tc.name)
+		}
+		previous = current
 	}
 }
 

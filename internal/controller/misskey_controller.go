@@ -102,8 +102,8 @@ func (r *MisskeyReconciler) event(m *misskeyv1beta1.Misskey, eventType, reason, 
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;persistentvolumeclaims;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 // Secretはwatch/Ownsせずname指定getのみ(cluster全Secretのlist/watch権限を持たない)
-// operatorはSecretを削除しないためdeleteも付与しない(生成SecretのcleanupはownerRef GCに委ねる)
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;update;patch
+// deleteは不要になったOperator生成Detector Secretの削除に使用
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses;networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
@@ -346,12 +346,22 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 			return err
 		}
 	}
+	if p.sensitiveDetectorManaged {
+		if err := r.reconcileSensitiveDetectorSecret(ctx, m); err != nil {
+			return err
+		}
+	}
 	if err := r.reconcileConfigMaps(ctx, m, p); err != nil {
 		return err
 	}
 	// 隔離はpod作成前に
 	if err := r.reconcileTenancy(ctx, m); err != nil {
 		return err
+	}
+	if p.sensitiveDetectorManaged {
+		if err := r.reconcileSensitiveDetector(ctx, m, p); err != nil {
+			return err
+		}
 	}
 	if p.dbManaged {
 		if err := r.reconcilePostgres(ctx, m); err != nil {
@@ -383,6 +393,11 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 			return err
 		}
 	}
+	sensitiveDetectorStateExists, err := r.hasSensitiveDetectorConfigState(ctx, m)
+	if err != nil {
+		return err
+	}
+	sensitiveDetectorConfigDone := !p.sensitiveDetectorEnabled && !sensitiveDetectorStateExists
 	if m.Spec.Suspend {
 		// 休止: app/workerを0に落としautoscaler削除。migration/objectStorage Jobの新規作成もskip
 		// 実行中のmigration Jobは走り切らせる(途中killの方が危険)
@@ -410,8 +425,14 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 					return err
 				}
 			}
+			if p.sensitiveDetectorEnabled || sensitiveDetectorStateExists {
+				sensitiveDetectorConfigDone, err = r.reconcileSensitiveDetectorConfig(ctx, m, p)
+				if err != nil {
+					return err
+				}
+			}
 			// redis ready後にのみapp/workerをroll, sentinel準備前のroll回避(pub/sub購読失敗防止)
-			if objReady && r.redisReady(ctx, m) {
+			if objReady && sensitiveDetectorConfigDone && r.redisReady(ctx, m) {
 				if err := r.reconcileApp(ctx, m, p); err != nil {
 					return err
 				}
@@ -429,6 +450,9 @@ func (r *MisskeyReconciler) reconcileAll(ctx context.Context, m *misskeyv1beta1.
 		return err
 	}
 	if err := r.reconcileMonitoring(ctx, m, p); err != nil {
+		return err
+	}
+	if err := r.finalizeSensitiveDetectorCleanup(ctx, m, p, sensitiveDetectorConfigDone); err != nil {
 		return err
 	}
 	return nil
@@ -463,6 +487,17 @@ func (r *MisskeyReconciler) updateStatus(ctx context.Context, m *misskeyv1beta1.
 		set = append(set, cnd{"ObjectStorageConfigured", oSt, oR, oM})
 	} else {
 		remove = append(remove, "ObjectStorageConfigured")
+	}
+	sensitiveDetectorState, sensitiveDetectorStateErr := r.hasSensitiveDetectorConfigState(ctx, m)
+	if p.sensitiveDetectorEnabled || sensitiveDetectorState || sensitiveDetectorStateErr != nil {
+		if sensitiveDetectorStateErr != nil {
+			set = append(set, cnd{"SensitiveDetectorReady", metav1.ConditionFalse, "StatusUnknown", truncateMsg(sensitiveDetectorStateErr.Error())})
+		} else {
+			detectorStatus, detectorReason, detectorMessage := r.sensitiveDetectorCondition(ctx, m, p)
+			set = append(set, cnd{"SensitiveDetectorReady", detectorStatus, detectorReason, detectorMessage})
+		}
+	} else {
+		remove = append(remove, "SensitiveDetectorReady")
 	}
 	aSt, aR, aM := r.deploymentReady(ctx, m, nameApp(m))
 	set = append(set, cnd{"AppReady", aSt, aR, aM})

@@ -89,6 +89,12 @@ func TestValidateImageAllowlist(t *testing.T) {
 			x.Spec.Redis.HA = &misskeyv1beta1.RedisHA{Image: "evil/redis:8"}
 		},
 		func(x *misskeyv1beta1.Misskey) { x.Spec.Search.Meilisearch.Image = "evil/meili:v1" },
+		func(x *misskeyv1beta1.Misskey) {
+			x.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{Mode: "all", Image: "evil/detector:v1"}
+		},
+		func(x *misskeyv1beta1.Misskey) {
+			x.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{Mode: "all", ConfigJobImage: "evil/psql:v1"}
+		},
 	} {
 		mm := base()
 		mm.Spec.Image = "ghcr.io/trusted/misskey:x"

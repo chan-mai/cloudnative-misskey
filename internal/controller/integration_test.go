@@ -348,6 +348,240 @@ func TestSuspendResume(t *testing.T) {
 	}
 }
 
+func TestSensitiveDetectorGateAndStatus(t *testing.T) {
+	ctx, cl, sch := setupEnvtest(t)
+	ns := "sensitive"
+	if err := cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	m := &misskeyv1beta1.Misskey{
+		ObjectMeta: metav1.ObjectMeta{Name: "detector", Namespace: ns},
+		Spec: misskeyv1beta1.MisskeySpec{
+			URL:    "https://detector.example.com/",
+			Image:  "misskey/misskey:2026.7.0",
+			Search: misskeyv1beta1.SearchSpec{Provider: misskeyv1beta1.SearchSQLLike},
+			Postgres: misskeyv1beta1.PostgresSpec{External: &misskeyv1beta1.ExternalPostgres{
+				Host: "pg", Database: "misskey", User: "misskey",
+				PasswordSecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pg"}, Key: "password"},
+			}},
+			Redis: misskeyv1beta1.RedisSpec{External: &misskeyv1beta1.ExternalRedis{Host: "redis"}},
+			SensitiveDetector: &misskeyv1beta1.SensitiveDetectorSpec{
+				Mode: "all",
+			},
+		},
+	}
+	if err := cl.Create(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	r := &MisskeyReconciler{Client: cl, Scheme: sch}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: m.Name, Namespace: ns}}
+	reconcile := func() {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		reconcile()
+	}
+
+	if !exists(ctx, cl, &corev1.Secret{}, nameSensitiveDetector(m), ns) {
+		t.Error("generated detector Secret not created")
+	}
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameSensitiveDetector(m), ns) {
+		t.Error("detector Deployment not created")
+	}
+	if !exists(ctx, cl, &corev1.Service{}, nameSensitiveDetector(m), ns) {
+		t.Error("detector Service not created")
+	}
+
+	migration := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameMigrate(m), Namespace: ns}, migration); err != nil {
+		t.Fatal(err)
+	}
+	migration.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, migration); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+
+	cm := &corev1.ConfigMap{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: ns}, cm); err != nil {
+		t.Fatal(err)
+	}
+	hash := cm.Data["desired-hash"]
+	configJob := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, hash), Namespace: ns}, configJob); err != nil {
+		t.Fatal(err)
+	}
+	if exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) {
+		t.Error("app created before Sensitive Detector configuration completed")
+	}
+	configJob.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, configJob); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameApp(m), ns) || !exists(ctx, cl, &appsv1.Deployment{}, nameWorker(m), ns) {
+		t.Error("app/worker not created after Sensitive Detector configuration completed")
+	}
+	cur := &misskeyv1beta1.Misskey{}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCondition(cur, "SensitiveDetectorReady", metav1.ConditionFalse) {
+		t.Errorf("SensitiveDetectorReady must be False before detector readiness: %+v", cur.Status.Conditions)
+	}
+	if cur.Status.Phase != "Progressing" {
+		t.Errorf("phase=%q, want Progressing", cur.Status.Phase)
+	}
+	detector := &appsv1.Deployment{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetector(m), Namespace: ns}, detector); err != nil {
+		t.Fatal(err)
+	}
+	detector.Status.ObservedGeneration = detector.Generation
+	detector.Status.Replicas = 1
+	detector.Status.UpdatedReplicas = 1
+	detector.Status.AvailableReplicas = 1
+	detector.Status.ReadyReplicas = 1
+	if err := cl.Status().Update(ctx, detector); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCondition(cur, "SensitiveDetectorReady", metav1.ConditionTrue) {
+		t.Errorf("SensitiveDetectorReady must become True: %+v", cur.Status.Conditions)
+	}
+
+	externalSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "external-detector", Namespace: ns}, StringData: map[string]string{"token": "external-key"}}
+	if err := cl.Create(ctx, externalSecret); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.SensitiveDetector.External = &misskeyv1beta1.ExternalSensitiveDetector{
+		URL: "https://detector.example.com/",
+		APIKeySecret: corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: externalSecret.Name}, Key: "token",
+		},
+	}
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if !exists(ctx, cl, &appsv1.Deployment{}, nameSensitiveDetector(m), ns) {
+		t.Error("managed detector removed before external configuration completed")
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: ns}, cm); err != nil {
+		t.Fatal(err)
+	}
+	configJob = &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, cm.Data["desired-hash"]), Namespace: ns}, configJob); err != nil {
+		t.Fatal(err)
+	}
+	configJob.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, configJob); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	convergeWorkloads := func() {
+		for _, deploymentName := range []string{nameApp(m), nameWorker(m)} {
+			dep := &appsv1.Deployment{}
+			if err := cl.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: ns}, dep); err != nil {
+				t.Fatal(err)
+			}
+			desired := int32(1)
+			if dep.Spec.Replicas != nil {
+				desired = *dep.Spec.Replicas
+			}
+			dep.Status.ObservedGeneration = dep.Generation
+			dep.Status.Replicas = desired
+			dep.Status.UpdatedReplicas = desired
+			dep.Status.AvailableReplicas = desired
+			dep.Status.ReadyReplicas = desired
+			if err := cl.Status().Update(ctx, dep); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	convergeWorkloads()
+	reconcile()
+	if exists(ctx, cl, &appsv1.Deployment{}, nameSensitiveDetector(m), ns) {
+		t.Error("managed detector not removed after external transition")
+	}
+	if exists(ctx, cl, &corev1.Secret{}, nameSensitiveDetector(m), ns) {
+		t.Error("generated detector Secret not removed after external transition")
+	}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCondition(cur, "SensitiveDetectorReady", metav1.ConditionTrue) {
+		t.Errorf("external detector must be ready after DB configuration: %+v", cur.Status.Conditions)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: ns}, cm); err != nil {
+		t.Fatal(err)
+	}
+	oldHash := cm.Data["desired-hash"]
+	if err := cl.Get(ctx, types.NamespacedName{Name: externalSecret.Name, Namespace: ns}, externalSecret); err != nil {
+		t.Fatal(err)
+	}
+	externalSecret.Data["token"] = []byte("rotated-key")
+	if err := cl.Update(ctx, externalSecret); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: ns}, cm); err != nil {
+		t.Fatal(err)
+	}
+	if cm.Data["desired-hash"] == oldHash {
+		t.Error("Sensitive Detector configuration hash unchanged after API key rotation")
+	}
+	rotatedJob := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, cm.Data["desired-hash"]), Namespace: ns}, rotatedJob); err != nil {
+		t.Fatal(err)
+	}
+	rotatedJob.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, rotatedJob); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	convergeWorkloads()
+	reconcile()
+
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.SensitiveDetector = nil
+	if err := cl.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfig(m), Namespace: ns}, cm); err != nil {
+		t.Fatal(err)
+	}
+	resetJob := &batchv1.Job{}
+	if err := cl.Get(ctx, types.NamespacedName{Name: nameSensitiveDetectorConfigJob(m, cm.Data["desired-hash"]), Namespace: ns}, resetJob); err != nil {
+		t.Fatal(err)
+	}
+	resetJob.Status.Succeeded = 1
+	if err := cl.Status().Update(ctx, resetJob); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	convergeWorkloads()
+	reconcile()
+	if exists(ctx, cl, &corev1.ConfigMap{}, nameSensitiveDetectorConfig(m), ns) {
+		t.Error("Sensitive Detector configuration state not removed after disable")
+	}
+	if err := cl.Get(ctx, req.NamespacedName, cur); err != nil {
+		t.Fatal(err)
+	}
+	for _, condition := range cur.Status.Conditions {
+		if condition.Type == "SensitiveDetectorReady" {
+			t.Errorf("SensitiveDetectorReady remains after disable: %+v", condition)
+		}
+	}
+}
+
 // TestChannelResolveNoPersist: imageFromの解決値がworkloadに使われ、APIのspec.imageは空のままなこと
 func TestChannelResolveNoPersist(t *testing.T) {
 	ctx, cl, sch := setupEnvtest(t)
@@ -1215,6 +1449,19 @@ func TestObjectStorageRemovalCleanup(t *testing.T) {
 
 // TestCELValidation: CRDのCEL(XValidation)がAPIサーバで常時強制されることを検証
 // webhook非依存でimmutable(url/id/tenant)とcross-field整合が効くこと
+func externalSensitiveDetectorSpec() *misskeyv1beta1.SensitiveDetectorSpec {
+	return &misskeyv1beta1.SensitiveDetectorSpec{
+		Mode: "local",
+		External: &misskeyv1beta1.ExternalSensitiveDetector{
+			URL: "https://detector.example.com/",
+			APIKeySecret: corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "detector"},
+				Key:                  "token",
+			},
+		},
+	}
+}
+
 func TestCELValidation(t *testing.T) {
 	ctx, cl, _ := setupEnvtest(t)
 	ns := "cel-test"
@@ -1406,6 +1653,55 @@ func TestCELValidation(t *testing.T) {
 				},
 			}
 		}},
+		{"Sensitive Detector without mode", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{}
+		}},
+		{"Sensitive Detector excessive batch", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{Mode: "all", MaxImagesPerRequest: 11}
+		}},
+		{"external Sensitive Detector without Secret name", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{
+				Mode: "all",
+				External: &misskeyv1beta1.ExternalSensitiveDetector{
+					URL:          "https://detector.example.com/",
+					APIKeySecret: corev1.SecretKeySelector{Key: "token"},
+				},
+			}
+		}},
+		{"external and managed Sensitive Detector keys", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{
+				Mode:         "all",
+				APIKeySecret: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "managed"}, Key: "token"},
+				External: &misskeyv1beta1.ExternalSensitiveDetector{
+					URL:          "https://detector.example.com/",
+					APIKeySecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "external"}, Key: "token"},
+				},
+			}
+		}},
+		{"external Sensitive Detector URL exceeds meta limit", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = externalSensitiveDetectorSpec()
+			m.Spec.SensitiveDetector.External.URL = "https://" + strings.Repeat("a", 1017)
+		}},
+		{"external Sensitive Detector with image", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = externalSensitiveDetectorSpec()
+			m.Spec.SensitiveDetector.Image = "detector:v1"
+		}},
+		{"external Sensitive Detector with replicas", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = externalSensitiveDetectorSpec()
+			m.Spec.SensitiveDetector.Replicas = ptr.To[int32](1)
+		}},
+		{"external Sensitive Detector with resources", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = externalSensitiveDetectorSpec()
+			m.Spec.SensitiveDetector.Resources.Requests = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")}
+		}},
+		{"external Sensitive Detector with nodeSelector", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = externalSensitiveDetectorSpec()
+			m.Spec.SensitiveDetector.NodeSelector = map[string]string{"node": "detector"}
+		}},
+		{"external Sensitive Detector with tolerations", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = externalSensitiveDetectorSpec()
+			m.Spec.SensitiveDetector.Tolerations = []corev1.Toleration{{Key: "detector"}}
+		}},
 	}
 	for i, tc := range cross {
 		m := valid(fmt.Sprintf("cross-%d", i))
@@ -1431,6 +1727,18 @@ func TestCELValidation(t *testing.T) {
 		{"imageFrom only", func(m *misskeyv1beta1.Misskey) {
 			m.Spec.Image = ""
 			m.Spec.ImageFrom = &misskeyv1beta1.ImageFromSource{Channel: "stable"}
+		}},
+		{"managed Sensitive Detector", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{Mode: "all"}
+		}},
+		{"external Sensitive Detector", func(m *misskeyv1beta1.Misskey) {
+			m.Spec.SensitiveDetector = &misskeyv1beta1.SensitiveDetectorSpec{
+				Mode: "local",
+				External: &misskeyv1beta1.ExternalSensitiveDetector{
+					URL:          "https://detector.example.com/",
+					APIKeySecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "detector"}, Key: "token"},
+				},
+			}
 		}},
 	}
 	for i, tc := range positive {
