@@ -1,6 +1,6 @@
 # CloudNative Misskey
 
-Kubernetes上でMisskeyインスタンスを宣言的に管理するOperatorです。1つの`Misskey`カスタムリソースから、app/worker/proxy/Redis/MeiliSearch/PostgreSQL/Ingressまでを生成します。
+Kubernetes上でMisskeyインスタンスを宣言的に管理するOperatorです。1つの`Misskey`カスタムリソースから、app/worker/proxy/Redis/MeiliSearch/PostgreSQL/SensitiveDetector/Ingressまでを生成します。
 
 全文検索はMeiliSearchを既定にしています。`search.provider`で`sqlPgroonga`/`sqlLike`も選べます。
 
@@ -17,6 +17,7 @@ flowchart TD
   CR --> redis["Redis StatefulSet"]
   CR --> meili["MeiliSearch StatefulSet + master key Secret"]
   CR --> pg["PostgreSQL: CNPG Cluster"]
+  CR --> detector["SensitiveDetector: managed/external"]
 
   ing --> proxy
   proxy --> app
@@ -24,9 +25,11 @@ flowchart TD
   app --> pg
   app --> redis
   app --> meili
+  app --> detector
   worker --> pg
   worker --> redis
   worker --> meili
+  worker --> detector
 ```
 
 ## コンポーネント
@@ -36,6 +39,7 @@ flowchart TD
 - **Redis**は`redis:8-alpine`(Redis 8を要件とする)を使い、`maxmemory`(既定400mb)と`maxmemory-policy`(既定`noeviction`)を設定し、job queue耐久化のためAOFを既定で有効にします。`redis.external`で外部参照もできます。
 - **MeiliSearch**のmaster keyは、未指定なら自動生成して`<name>-meilisearch` Secretに保存します。
 - **PostgreSQL**はCNPGの`Cluster`を生成します。app用の認証情報`<name>-db-app` SecretはCNPGが払い出し、Misskeyはそこからパスワードを読みます。`postgres.external`で外部DB参照もできます。
+- **SensitiveDetector**はMisskey 2026.7.0以降のセンシティブ判定を処理します。`sensitiveDetector.external`を省略すると公式イメージをDeploymentとして配備し、指定すると既存サービスを参照します。
 
 ## 前提
 
@@ -141,7 +145,7 @@ spec:
 | `trackImageDigest` | `false` | imageのタグをレジストリでdigest解決しpodを`image@digest`にpin、定期再解決(5分TTL)する。`:latest`等のmutableタグへの再pushを検知してapp/workerを自動ロール。private registryは`imagePullSecrets`で認証。offの場合はdigest付き参照を推奨(タグ打ち直しは検知されない) |
 | `imageFrom.channel` | (どちらか必須) | `MisskeyChannel`からimageを解決し段階ロールアウトに追従。詳細は[fleetのimage管理](#fleetのimage管理misskeychannel) |
 | `idGenerationMethod` | `aidx` | ID方式。初期化後は変更不可 |
-| `deletionPolicy` | `Retain` | CR削除時のデータ資源(CNPG/Redis/Meili/生成key Secret)の扱い。既定`Retain`はownerRefを外しデータ保持(同名CR再作成で再adopt)。`Delete`でDB含め全GC(破壊的)。**注意: 既定は以前`Delete`。誤削除でのDB全損を防ぐため`Retain`へ変更** |
+| `deletionPolicy` | `Retain` | CR削除時のデータ資源(CNPG/Redis/Meili/生成key Secret)の扱い。SensitiveDetectorの生成APIキーSecretも保持対象。既定`Retain`はownerRefを外しデータ保持(同名CR再作成で再adopt)。`Delete`でDB含め全GC(破壊的)。**注意: 既定は以前`Delete`。誤削除でのDB全損を防ぐため`Retain`へ変更** |
 | `suspend` | `false` | インスタンス休止。app/workerを0にしmigration等のJob新規作成を停止、proxy/DB/Redis/Meiliは稼働継続で訪問者にはメンテページが出る。phaseは`Suspended` |
 | `tenant` | namespace名 | 全リソース/podに付く`cloudnative-misskey.dev/tenant`ラベル値。ログ/メトリクスのテナント振り分け用。初期化後は変更不可 |
 | `setupPassword` | (なし) | 初回admin登録用パスワード。`secretRef`指定か、未指定なら`<name>-setup` Secretへ自動生成 |
@@ -173,7 +177,7 @@ spec:
 | `monitoring.enabled` | `false` | PostgreSQL/Redis/MeiliSearch/proxy(Caddy)のServiceMonitor/PodMonitorを生成(opt-in, Prometheus Operator必須)。Redisはexporter、Meiliは`/metrics`を自動有効化。proxyはCaddyのHTTPメトリクス(RPS/レイテンシ/ステータス)を`:9180/metrics`で公開。`monitoring.labels`でPrometheus selector合わせ |
 | `monitoring.rules` | 有効時on | 基本アラートのPrometheusRule(`<name>-alerts`)を生成。proxy 5xx比率>5%と、backup設定時は最新バックアップの鮮度(`backupMaxAge`既定48h)。`rules.enabled: false`でopt-out |
 | `objectStorage` | (なし) | S3/R2互換media storage(opt-in)。DBのmetaテーブルへ書込むため詳細は[オブジェクトストレージ](#オブジェクトストレージmedia) |
-| `sensitiveDetector` | (なし) | Misskey 2026.7.0以降の外部センシティブ検出。Detectorの配備または外部参照とDB設定を管理。詳細は[Sensitive Detector](#sensitive-detector) |
+| `sensitiveDetector` | (なし) | Misskey 2026.7.0以降のSensitiveDetector対応。managed構成またはexternal構成とDB設定を管理。詳細は[SensitiveDetector](#sensitivedetector) |
 | `performance` | (Misskey既定) | job queueチューニング。`deliverJobConcurrency`/`inboxJobConcurrency`/`deliverJobPerSec`/`inboxJobPerSec`/`relationshipJobPerSec`/`deliverJobMaxAttempts`/`inboxJobMaxAttempts`。未設定キーは`default.yml`に出さずMisskey既定に委ねる |
 | `outboundProxy` | (なし) | 外向きforward proxy。`http`(→`proxy`)/`smtp`(→`proxySmtp`)/`bypassHosts`(→`proxyBypassHosts`)。`spec.proxy`(前段Caddy)とは別 |
 | `files.maxFileSize` | (Misskey既定) | アップロード上限(bytes) |
@@ -352,9 +356,9 @@ channelの`image`を更新すると、各インスタンスはnamespace/名前�
 - 参照先channelが存在しないとそのインスタンスはPhase=Errorになります
 - 切替の反映粒度はreconcile周期(既定でready時3分)です
 
-## Sensitive Detector
+## SensitiveDetector
 
-Misskey 2026.7.0以降ではセンシティブ判定の推論処理に外部HTTPサービスが必要です。`spec.sensitiveDetector`を設定すると、Operatorが公式Sensitive DetectorとMisskeyの`meta`設定を管理します。
+Misskey 2026.7.0以降ではセンシティブ判定の推論処理に外部HTTPサービスが必要です。`spec.sensitiveDetector`を設定すると、Operatorが[公式SensitiveDetector](https://github.com/misskey-dev/sensitive-detector)とMisskeyの`meta`設定を管理します。
 
 managed構成:
 
@@ -373,9 +377,18 @@ spec:
       limits: { memory: 2Gi }
 ```
 
-Operatorは`<name>-sensitive-detector`のDeployment/Service/PDB/ConfigMap/Secretを生成します。`apiKeySecret`を指定すると既存Secretを参照し、省略すると64文字のAPIキーを生成します。生成キーは`cloudnative-misskey.dev/rotate`annotationで更新できます。
+Operatorは`<name>-sensitive-detector`のDeployment/Service/PDB/ConfigMap/Secretを生成します。既定イメージは`ghcr.io/misskey-dev/sensitive-detector:0.0.2`、既定レプリカ数は1です。`apiKeySecret`を指定すると既存Secretを参照し、省略すると64文字のAPIキーを生成します。
 
-外部Detector参照:
+生成したAPIキーの取得:
+
+```bash
+kubectl -n <namespace> get secret <name>-sensitive-detector \
+  -o jsonpath='{.data.SENSITIVE_DETECTOR_API_KEY}' | base64 -d ; echo
+```
+
+生成キーはCRの`cloudnative-misskey.dev/rotate`annotationの値を変更すると更新されます。`deletionPolicy=Retain`ではCR削除時にSecretを保持し、同名CRの再作成時に再利用します。
+
+external構成:
 
 ```yaml
 spec:
@@ -388,9 +401,11 @@ spec:
 
 - `mode`は必須です。設定ブロックがないCRでは既存の管理画面設定を変更しません
 - 設定中はmigration完了後にmeta設定Jobを実行し、完了後にapp/workerを更新します
-- managed Detectorが未準備の場合もapp/workerは稼働を継続しますが、`SensitiveDetectorReady=False`と`phase=Progressing`になります
-- 外部DetectorはOperatorから疎通確認せず、meta設定Jobの完了を`SensitiveDetectorReady=True`として扱います
-- 外部Detectorの`url`は1024文字以内です。`image`/`replicas`/`resources`/`nodeSelector`/`tolerations`はmanaged構成でのみ指定できます
+- managed構成が未準備の場合もapp/workerは稼働を継続しますが、`SensitiveDetectorReady=False`と`phase=Progressing`になります
+- external構成はOperatorから疎通確認せず、meta設定Jobの完了を`SensitiveDetectorReady=True`として扱います
+- `external.url`にはBaseURLを1024文字以内で指定します。Misskeyは`/v1/detect-images`を付加してリクエストします
+- `image`/`replicas`/`resources`/`nodeSelector`/`tolerations`/`apiKeySecret`はmanaged構成でのみ指定できます。external構成のAPIキーは`external.apiKeySecret`で指定します
+- `imagePullSecrets`はmanaged構成のDeploymentとmeta設定Jobの両方に適用します
 - managed構成で生成APIキーから`apiKeySecret`へ切り替えると、設定とworkloadの更新完了後に生成Secretを削除します
 - 設定ブロックを削除すると検出を`none`へ変更し、URL/APIキーを解除してapp/workerを更新した後にmanagedリソースを削除します
 - `configJobImage`はpsql 16以降を含むイメージを指定します。既定は`ghcr.io/cloudnative-pg/postgresql:17`です
@@ -502,7 +517,7 @@ make test-e2e    # kind e2e
 
 - 外部operatorのCRD(CNPGの`Cluster`/`Pooler`、redis-operatorの`RedisReplication`/`RedisSentinel`、KEDAの`ScaledObject`)はServer-Side Applyで管理しますが、watchはしていません。これらを外部から直接削除・改変した場合の是正は、reconcile成功後に定期requeue(既定3分、`--drift-resync-interval`で調整)でSSAを再適用して行います。よってドリフトは最大その間隔で自動是正されます(Deployment/NetworkPolicy/PDB等のnative resourceはOwns()でwatch・即時是正)。
 - migration Jobが失敗し切った場合(BackoffLimit超過)、DB接続先やmigrationフラグ等のspec変更時は自動で作り直されます。同一設定のまま再試行するには`kubectl delete job <name>-migrate-<hash>`で削除すると、次のreconcileで再生成されます(同一入力の失敗を無限リトライしないのは、`createIndexConcurrently`失敗時のinvalid index堆積等を避けるためです)。
-- `Ready`/`Phase`はDB/Redis/MeiliSearch/migration/object storage/sensitive detector/app/worker/proxy/Ingressの全conditionsの集約です。managed Redis/MeiliSearch/Sensitive Detectorはworkloadのready数、externalは設定完了をTrueとして扱います。
+- `Ready`/`Phase`はDB/Redis/MeiliSearch/migration/object storage/SensitiveDetector/app/worker/proxy/Ingressの全conditionsの集約です。managed Redis/MeiliSearch/SensitiveDetectorはworkloadのready数、externalは設定完了をTrueとして扱います。
 - appのオートスケールはCPU/memory(native HPA)に加え、`autoscaling.rps`でRPSベース(KEDA prometheus trigger)を選べます。rps指定時はKEDA経路になりmemory targetは効きません。
 - immutable検証(`url`/`idGenerationMethod`/`tenant`/`postgres.recovery`)とcross-field整合(managed/external排他、pooler/backup/recoveryのmanaged必須、recoveryとbackupのWALアーカイブ衝突防止、autoscaling min<=max、redis role排他)はCRDのCEL(`x-kubernetes-validations`)で**常時**強制します。APIサーバが直接弾くため、webhook未導入でも効きます。
 - webhook(`config/default-webhook`、cert-manager必須、opt-in)はCELで表せない補助のみを担います: `tenant`未設定→namespace確定のdefaulting(「未設定→初回設定」の穴塞ぎ)と、エラーにしない警告(external DBで`readOffload`無効、等)。cert-manager無しなら`config/default`(webhook無し)を使います。manager側は`ENABLE_WEBHOOKS=false`が設定済みで、`config/default-webhook`のpatchが`true`へ上書きします。webhook無しの場合`tenant`は生成時に明示してください(defaultingが効かないため)。
@@ -510,14 +525,14 @@ make test-e2e    # kind e2e
 - PostgreSQL(CNPG)は隔離NetworkPolicyの対象外です。CNPG operatorが別namespaceからinstance manager(:8000)へ接続するため意図的に除外しており、DBのネットワーク保護はCNPG/platform側に委ねます。backend隔離下で監視namespaceからscrapeするには`network.isolation.allowedNamespaces`で明示的に開けてください。
 - **オブジェクトストレージ(media)は`spec.objectStorage`で設定できます**([オブジェクトストレージ](#オブジェクトストレージmedia)参照)。未設定時のアップロードファイルはpodローカル(emptyDir)に置かれ、**pod再起動で消え、複数レプリカ間でも共有されません**。よって`app.replicas>1`で運用する場合は`objectStorage`を設定してください。既存アップロード済みファイルは設定後も移行されません(新規アップロードのみ対象)。
 - MeiliSearchは公式に水平スケール機構がないため、単一レプリカで動かします。
-- 参照Secret(DBパスワード/Meiliキー/Redisパスワード/setupPassword)のローテーションはpodテンプレートのchecksumに反映され、app/worker/失敗中のmigration Jobが自動で追従します。判定はSecretの`resourceVersion`基準のため、値が変わらないmetadata更新でもローリングが起きることがあります。
+- 参照Secret(DBパスワード/Meiliキー/Redisパスワード/setupPassword)のローテーションはpodテンプレートのchecksumに反映され、app/worker/失敗中のmigration Jobが自動で追従します。SensitiveDetector APIキーの変更はmanaged構成のDeployment/meta設定Job/app/workerへ反映します。判定はSecretの`resourceVersion`基準のため、値が変わらないmetadata更新でもローリングが起きることがあります。
 - **Secretはcluster-wideにlist/watchしません**(全Secretのinformerキャッシュ肥大とRBAC上のlist/watch権限を排し、name指定getのみ)。operator生成/CNPG/ユーザ持込Secretの変更検知はconfig-checksumと定期requeue(`--drift-resync-interval`、既定3分)で反映するため、外部Secret値のローテはpodローリングまで最大その間隔の遅延があります。
-- operator生成Secret(setup/redis-auth/meiliキー)は既定で不変です。ローテーションはCRに`cloudnative-misskey.dev/rotate: <任意の値>`annotationを付け、値を変えるたびに新しい乱数へ再生成されます(checksum経由でpodが追従)。
+- operator生成Secret(setup/redis-auth/meiliキー/SensitiveDetector APIキー)は既定で不変です。ローテーションはCRに`cloudnative-misskey.dev/rotate: <任意の値>`annotationを付け、値を変えるたびに新しい乱数へ再生成されます(checksum経由でpodが追従)。
 - **セキュリティ強化のmanagerフラグ**(いずれも既定は無効=後方互換): `--watch-namespaces`(監視namespaceを限定。namespaced resource(Misskeyと子リソース)はnamespace別RoleBindingで付与できるが、cluster-scopedな`MisskeyChannel`はmisskeychannelsへの`get;list;watch`を持つ小さなClusterRoleが別途必要)、`--allowed-image-registries`(全ユーザ指定imageのレジストリprefix許可リスト、webhookで拒否)、`--allowed-cluster-issuers`(`ingress.issuerRef`のClusterIssuer許可リスト)。Ingress annotationはnginx snippet系/auth系/mirror系を遮断し、operator管理キーはユーザ指定で上書きできません。
 - managed redisは常時requirepass認証です。認証を持たない旧版からアップグレードすると、standalone redis STS(command/env変更)とdefault.ymlへの`pass:`追加でredis/app/worker/migrationが一度ローリングします。AOFでデータは保持され、機能的な破壊はありません。
 - メンテナンス応答は既定HTTP 200のため、外形監視は実ステータスを返す`/api/*`を対象にしてください。
 - Caddyの`trusted_proxies`は`private_ranges`固定です。前段が非private(cluster外のCloudflare等)なら実CIDRに合わせた調整が要ります。
 - initContainerが起動毎に`built/`(数百MB規模)をコピーするため、起動レイテンシに影響します。
 - backend image既定の固定方針: upstreamがrolling majorタグを出すものは**major float**でpatch/minorに追従します(`caddy:2`/`redis:8-alpine`/CNPG `postgresql:17`/`meilisearch:v1`)。opstree `redis`/`redis-sentinel`(`v8.2.5`)と`redis_exporter`(`v1.62.0`)はupstreamがrolling major/minorを出さないため**patch pin**です(opstreeはredis-operatorのtested版と揃える意味もあり)。既定は時間で古びるので、operatorリリース毎にpinを見直します。再現性重視で全て固定したい場合は各`image`で明示指定してください。
-- image既定の適用場所はデータ互換性で分けています。stateful系(`postgres.image`/`redis.image`/`meilisearch.image`/HA image)はCRD defaultとしてCR作成時に永続化され、operatorを更新しても既存インスタンスのmajorは固定のままです。stateless系(`proxy.image`/`monitoring.redisExporterImage`/`objectStorage.image`)はoperator側適用のため、operator更新で全インスタンスに追従します。
+- image既定の適用場所はデータ互換性で分けています。stateful系(`postgres.image`/`redis.image`/`meilisearch.image`/HA image)はCRD defaultとしてCR作成時に永続化され、operatorを更新しても既存インスタンスのmajorは固定のままです。stateless系(`proxy.image`/`monitoring.redisExporterImage`/`objectStorage.image`/`sensitiveDetector.image`)はoperator側適用のため、operator更新で全インスタンスに追従します。
 - enumのcasingはbackendの実値に合わせています(統一より実値一致を優先): `deletionPolicy`(`Delete`/`Retain`)はk8s慣習のPascalCase、`search.provider`/`postgres.pooler.poolMode`/`search.meilisearch.scope`はMisskey/PgBouncerがそのまま受け取るlowercase値です。
