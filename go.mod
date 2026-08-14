@@ -3,7 +3,7 @@ module github.com/chan-mai/cloudnative-misskey
 go 1.26.6
 
 require (
-	github.com/google/go-containerregistry v0.21.8
+	github.com/google/go-containerregistry v0.21.9
 	github.com/google/go-containerregistry/pkg/authn/kubernetes v0.0.0-20260624172245-e8b2b9e51df6
 	k8s.io/api v0.36.3
 	k8s.io/apimachinery v0.36.3
