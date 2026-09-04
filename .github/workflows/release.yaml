@@ -90,7 +90,7 @@ jobs:
           ./bin/kustomize build config/default-webhook > dist/install-webhook.yaml
 
       # dist/はbuild install manifestsで作成済みのため、その後にSBOMを書き出す
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         if: github.ref_type == 'tag'
         with:
           image: ${{ env.IMG }}@${{ steps.build.outputs.digest }}
